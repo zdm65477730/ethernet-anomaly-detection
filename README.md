@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://github.com/zdm65477730/anomaly-detection-system/actions/workflows/tests.yml/badge.svg)](https://github.com/zdm65477730/anomaly-detection-system/actions/workflows/tests.yml)
+[![Tests](https://github.com/zdm65477730/ethernet-anomaly-detection/actions/workflows/tests.yml/badge.svg)](https://github.com/zdm65477730/ethernet-anomaly-detection/actions/workflows/tests.yml)
 
 异常检测系统是一款基于机器学习的网络安全防护工具，能够实时监控网络流量、识别异常行为并自动触发告警。系统融合了传统机器学习与深度学习技术，可适应企业内网、数据中心等多种网络环境。
 
@@ -35,8 +35,8 @@
 
 ### 快速安装
 # 克隆仓库
-git clone https://github.com/zdm65477730/anomaly-detection-system.git
-cd anomaly-detection-system
+git clone https://github.com/zdm65477730/ethernet-anomaly-detection.git
+cd ethernet-anomaly-detection
 
 # 使用辅助脚本安装依赖
 chmod +x scripts/install_dependencies.sh
@@ -128,8 +128,8 @@ pytest --cov=src tests/
 
 ## 联系方式
 
-- 项目主页：https://github.com/zdm65477730/anomaly-detection-system
-- 问题反馈：https://github.com/zdm65477730/anomaly-detection-system/issues
+- 项目主页：https://github.com/zdm65477730/ethernet-anomaly-detection
+- 问题反馈：https://github.com/zdm65477730/ethernet-anomaly-detection/issues
 - 技术支持：zdm65477730@126.com
 
 
