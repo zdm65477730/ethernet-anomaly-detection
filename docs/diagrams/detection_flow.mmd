@@ -1,0 +1,40 @@
+%% 实时流量检测流程（从数据包到告警的完整链路）
+sequenceDiagram
+    participant Capture as 数据包捕获模块
+    participant Session as 会话跟踪模块
+    participant Feature as 特征提取模块
+    participant Model as 模型推理模块
+    participant Detector as 异常检测引擎
+    participant Alert as 告警管理器
+    participant Storage as 数据存储
+    
+    loop 实时检测循环
+        Capture->>Capture: 监听网络接口<br/>捕获原始数据包
+        Capture->>Capture: 解析协议格式<br/>(Ethernet/IP/TCP/UDP)
+        Capture->>Session: 发送解析后的数据<br/>(含五元组+载荷信息)
+        
+        Session->>Session: 按五元组聚合会话<br/>(srcIP:srcPort→dstIP:dstPort:proto)
+        Session->>Session: 计算会话统计量<br/>(包数/字节数/持续时间)
+        Session->>Storage: 保存原始会话数据
+        
+        alt 会话满足特征提取条件
+            Session->>Feature: 触发特征提取<br/>(会话结束/超时/达到阈值)
+            Feature->>Feature: 提取统计特征<br/>(均值/方差/分布)
+            Feature->>Feature: 提取时序特征<br/>(速率/间隔/突发)
+            Feature->>Storage: 保存特征向量
+            Feature->>Model: 发送特征向量
+        end
+        
+        Model->>Model: 加载最优模型<br/>(按协议类型选择)
+        Model->>Model: 预测异常概率
+        Model->>Detector: 输出概率分数<br/>(0-1之间)
+        
+        Detector->>Detector: 应用决策规则<br/>(概率>阈值=异常)
+        alt 判定为异常
+            Detector->>Alert: 触发告警<br/>(含特征+概率+会话信息)
+            Alert->>Alert: 记录告警日志<br/>(级别+时间+详情)
+            Alert->>Alert: 发送通知<br/>(邮件/Slack)
+        end
+        
+        Detector->>Storage: 保存检测结果
+    end

@@ -1,0 +1,32 @@
+# 包含生产环境依赖
+-r requirements.txt
+
+# 测试工具
+pytest>=7.0.1
+pytest-cov>=3.0.0
+pytest-mock>=3.7.0
+unittest-xml-reporting>=3.0.4
+tox>=3.24.4
+
+# 代码质量与格式化
+flake8>=4.0.1
+black>=22.1.0
+isort>=5.10.1
+mypy>=0.942
+pylint>=2.13.9
+
+# 文档生成
+sphinx>=4.4.0
+sphinx-rtd-theme>=1.0.0
+m2r2>=0.3.2.post2
+
+# 开发工具
+ipython>=7.31.1
+jupyter>=1.0.0
+pre-commit>=2.17.0
+watchdog>=2.1.6
+
+# 构建与部署
+setuptools>=60.9.3
+wheel>=0.37.1
+twine>=3.8.0
