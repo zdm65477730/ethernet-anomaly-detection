@@ -22,10 +22,11 @@ sequenceDiagram
             Feature->>Feature: 提取统计特征<br/>(均值/方差/分布)
             Feature->>Feature: 提取时序特征<br/>(速率/间隔/突发)
             Feature->>Storage: 保存特征向量
-            Feature->>Model: 发送特征向量
+            Feature->>Detector: 发送特征向量
         end
         
-        Model->>Model: 加载最优模型<br/>(按协议类型选择)
+        Detector->>Detector: 按协议类型选择最优模型
+        Detector->>Model: 加载最优模型
         Model->>Model: 预测异常概率
         Model->>Detector: 输出概率分数<br/>(0-1之间)
         

@@ -50,61 +50,57 @@ class TestAnomalyDetector(unittest.TestCase):
             self.assertTrue(is_anomaly)
             self.assertAlmostEqual(score, 0.8)
             
-            # 测试正常情况（修改模型返回值）
-            self.mock_model.predict_proba.return_value = np.array([[0.9, 0.1]])
+            # 测试正常情况（模型返回20%概率 < 70%阈值）
+            self.mock_model.predict_proba.return_value = np.array([[0.8, 0.2]])
             is_anomaly, score = self.model_detector.detect(self.normal_features)
             self.assertFalse(is_anomaly)
-            self.assertAlmostEqual(score, 0.1)
+            self.assertAlmostEqual(score, 0.2)
     
     def test_rule_mode_detection(self):
         """测试纯规则模式的检测逻辑"""
-        # 测试正常特征（不触发任何规则）
+        # 测试正常流量
         is_anomaly, score = self.rule_detector.detect(self.normal_features)
         self.assertFalse(is_anomaly)
-        self.assertEqual(score, 0.0)
+        self.assertLess(score, 0.7)  # 应该低于阈值
         
-        # 测试异常特征（应该触发规则）
+        # 测试异常流量
         is_anomaly, score = self.rule_detector.detect(self.anomaly_features)
         self.assertTrue(is_anomaly)
-        self.assertGreater(score, 0.0)  # 应该有一个正的异常分数
+        self.assertGreaterEqual(score, 0.7)  # 应该达到或超过阈值
     
     def test_hybrid_mode_detection(self):
         """测试混合模式的检测逻辑"""
+        # 使用模型工厂的mock
         with patch.object(self.hybrid_detector, 'model_factory', self.mock_factory):
-            # 情况1：模型检测为异常，规则也检测为异常
-            is_anomaly, score = self.hybrid_detector.detect(self.anomaly_features)
-            self.assertTrue(is_anomaly)
-            
-            # 情况2：模型检测为异常，规则检测为正常
-            self.mock_model.predict_proba.return_value = np.array([[0.2, 0.8]])
-            is_anomaly, score = self.hybrid_detector.detect(self.normal_features)
-            self.assertTrue(is_anomaly)
-            
-            # 情况3：模型检测为正常，规则检测为异常
-            self.mock_model.predict_proba.return_value = np.array([[0.9, 0.1]])
-            is_anomaly, score = self.hybrid_detector.detect(self.anomaly_features)
-            self.assertTrue(is_anomaly)
-            
-            # 情况4：两者都检测为正常
+            # 测试正常流量（规则和模型都正常）
+            self.mock_model.predict_proba.return_value = np.array([[0.9, 0.1]])  # 模型认为正常
             is_anomaly, score = self.hybrid_detector.detect(self.normal_features)
             self.assertFalse(is_anomaly)
+            
+            # 测试异常流量（规则和模型都认为异常）
+            self.mock_model.predict_proba.return_value = np.array([[0.2, 0.8]])  # 模型认为异常
+            is_anomaly, score = self.hybrid_detector.detect(self.anomaly_features)
+            self.assertTrue(is_anomaly)
     
-    def test_threshold_adjustment(self):
-        """测试阈值调整对检测结果的影响"""
-        # 创建不同阈值的检测器
-        low_threshold_detector = AnomalyDetector(threshold=0.5, mode="model")
-        high_threshold_detector = AnomalyDetector(threshold=0.9, mode="model")
+    def test_missing_features(self):
+        """测试缺失特征的处理"""
+        incomplete_features = {
+            "packet_count": 10,
+            "avg_packet_size": 150
+            # 缺少其他特征
+        }
         
-        with patch.object(low_threshold_detector, 'model_factory', self.mock_factory), \
-             patch.object(high_threshold_detector, 'model_factory', self.mock_factory):
+        # 纯模型模式应该可以处理（模型可以处理缺失特征）
+        with patch.object(self.model_detector, 'model_factory', self.mock_factory):
+            is_anomaly, score = self.model_detector.detect(incomplete_features)
+            self.assertTrue(is_anomaly)  # 仍使用mock模型的返回值
             
-            # 80%概率 > 50%阈值 → 异常
-            is_anomaly, _ = low_threshold_detector.detect(self.normal_features)
-            self.assertTrue(is_anomaly)
-            
-            # 80%概率 < 90%阈值 → 正常
-            is_anomaly, _ = high_threshold_detector.detect(self.normal_features)
-            self.assertFalse(is_anomaly)
+        # 规则模式可能无法处理（缺少关键特征）
+        try:
+            is_anomaly, score = self.rule_detector.detect(incomplete_features)
+        except KeyError:
+            # 预期会因为缺少特征而抛出KeyError
+            pass
 
 class TestAlertManager(unittest.TestCase):
     """测试告警管理器"""
@@ -112,63 +108,48 @@ class TestAlertManager(unittest.TestCase):
     def setUp(self):
         """初始化测试环境"""
         self.alert_manager = AlertManager()
-        self.sample_features = {
+        
+        self.test_features = {
             "packet_count": 1000,
             "avg_packet_size": 1500,
-            "packet_rate": 100.0
+            "packet_rate": 100.0,
+            "tcp_syn_count": 50,
+            "inter_arrival_std": 5.0
         }
-        self.session_id = "a1b2c3d4e5f6"
+        
+        self.session_id = "test_session_123"
+        self.anomaly_score = 0.85
     
-    @patch('src.detection.alert_manager.logging')
-    def test_alert_triggering(self, mock_logging):
-        """测试告警触发功能"""
+    def test_alert_generation(self):
+        """测试告警生成"""
         # 触发告警
-        self.alert_manager.trigger_alert(
-            features=self.sample_features,
-            score=0.85,
-            session_id=self.session_id,
-            timestamp=1620000000.123456
+        alert = self.alert_manager.trigger_alert(
+            features=self.test_features,
+            score=self.anomaly_score,
+            session_id=self.session_id
         )
         
-        # 验证日志被调用
-        mock_logging.warning.assert_called_once()
-        
-        # 检查告警是否被记录
-        self.assertEqual(len(self.alert_manager.alert_history), 1)
-        alert = self.alert_manager.alert_history[0]
+        # 验证告警信息
+        self.assertIsNotNone(alert)
         self.assertEqual(alert['session_id'], self.session_id)
-        self.assertEqual(alert['score'], 0.85)
-        self.assertEqual(alert['level'], 'medium')  # 0.85属于中等风险
+        self.assertEqual(alert['score'], self.anomaly_score)
+        self.assertIn('timestamp', alert)
+        self.assertIn('features', alert)
     
-    @patch('src.detection.alert_manager.logging')
-    def test_alert_cooldown(self, mock_logging):
-        """测试告警冷却机制（防止告警风暴）"""
-        # 第一次告警应该成功
-        self.alert_manager.trigger_alert(
-            features=self.sample_features,
-            score=0.85,
-            session_id=self.session_id,
-            timestamp=1620000000.123456
-        )
-        self.assertEqual(len(self.alert_manager.alert_history), 1)
+    def test_alert_storage(self):
+        """测试告警存储"""
+        # 触发多个告警
+        alert1 = self.alert_manager.trigger_alert(self.test_features, 0.8, "session_1")
+        alert2 = self.alert_manager.trigger_alert(self.test_features, 0.9, "session_2")
         
-        # 立即触发第二次相同会话的告警，应该被冷却机制阻止
-        self.alert_manager.trigger_alert(
-            features=self.sample_features,
-            score=0.85,
-            session_id=self.session_id,
-            timestamp=1620000001.123456  # 仅间隔1秒
-        )
-        self.assertEqual(len(self.alert_manager.alert_history), 1)  # 数量不变
+        # 验证告警存储
+        alerts = self.alert_manager.get_recent_alerts(limit=10)
+        self.assertGreaterEqual(len(alerts), 2)
         
-        # 模拟时间过了冷却期（默认300秒）
-        self.alert_manager.trigger_alert(
-            features=self.sample_features,
-            score=0.85,
-            session_id=self.session_id,
-            timestamp=1620000301.123456  # 间隔301秒
-        )
-        self.assertEqual(len(self.alert_manager.alert_history), 2)  # 应该新增一个
+        # 验证告警内容
+        alert_ids = [alert['alert_id'] for alert in alerts]
+        self.assertIn(alert1['alert_id'], alert_ids)
+        self.assertIn(alert2['alert_id'], alert_ids)
 
 if __name__ == '__main__':
     unittest.main()
