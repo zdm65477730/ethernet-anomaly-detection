@@ -1,3 +1,0 @@
-[console_scripts]
-ads = src.cli:main
-anomaly-detector = src.cli:main
