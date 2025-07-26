@@ -94,39 +94,16 @@ def get_available_interfaces() -> List[str]:
         import pcapy
         return pcapy.findalldevs()
     except ImportError:
-        print_error("获取网络接口失败：未安装pcapy库")
-        return []
+        try:
+            # 尝试另一种导入方式
+            import pcapy_ng as pcapy
+            return pcapy.findalldevs()
+        except ImportError:
+            print_error("获取网络接口失败：未安装pcapy或pcapy-ng库")
+            return []
+        except Exception as e:
+            print_error(f"获取网络接口失败：{str(e)}")
+            return []
     except Exception as e:
         print_error(f"获取网络接口失败：{str(e)}")
         return []
-
-def validate_file_path(path: str, create_parent: bool = False) -> bool:
-    """
-    验证文件路径是否有效
-    
-    Args:
-        path: 文件路径
-        create_parent: 是否创建父目录
-        
-    Returns:
-        路径是否有效
-    """
-    parent_dir = os.path.dirname(path)
-    if not parent_dir:
-        return True  # 当前目录
-    
-    if not os.path.exists(parent_dir):
-        if create_parent:
-            try:
-                os.makedirs(parent_dir, exist_ok=True)
-                return True
-            except Exception as e:
-                print_error(f"创建父目录 {parent_dir} 失败: {str(e)}")
-                return False
-        return False
-        
-    if not os.path.isdir(parent_dir):
-        print_error(f"{parent_dir} 不是目录")
-        return False
-        
-    return True

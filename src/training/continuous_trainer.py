@@ -9,9 +9,11 @@ from src.config.config_manager import ConfigManager
 from src.data.data_storage import DataStorage
 from src.models.model_factory import ModelFactory
 from src.models.model_selector import ModelSelector
+from src.features.protocol_specs import get_all_protocols
 from .model_trainer import ModelTrainer
 from .incremental_trainer import IncrementalTrainer
 from .model_evaluator import ModelEvaluator
+from .feedback_optimizer import FeedbackOptimizer
 
 class ContinuousTrainer:
     """持续训练器，实现自动检查新数据、训练模型并优化的循环"""
@@ -30,6 +32,7 @@ class ContinuousTrainer:
         
         # 初始化训练器组件
         self.evaluator = ModelEvaluator(config=self.config)
+        self.feedback_optimizer = FeedbackOptimizer(config=self.config)
         self.base_trainer = ModelTrainer(
             model_factory=self.model_factory,
             config=self.config,
@@ -50,7 +53,8 @@ class ContinuousTrainer:
             "max_history_days": self.config.get("training.continuous.max_history_days", 30), # 最大历史数据天数
             "retrain_full_interval": self.config.get("training.continuous.retrain_full_interval", 86400 * 7),  # 7天
             "models_dir": self.config.get("model.models_dir", "models"),
-            "protocol_model_map": self.config.get("training.continuous.protocol_model_map", {})
+            "protocol_model_map": self.config.get("training.continuous.protocol_model_map", {}),
+            "enable_auto_optimization": self.config.get("training.continuous.enable_auto_optimization", True)
         }
         
         # 状态变量
@@ -153,7 +157,6 @@ class ContinuousTrainer:
         
         try:
             # 获取所有协议类型
-            from src.features.protocol_specs import get_all_protocols
             all_protocols = get_all_protocols()
             
             # 1. 检查通用模型是否需要训练（所有协议数据）
@@ -267,3 +270,124 @@ class ContinuousTrainer:
                     )
                     
                 except Exception as e:
+                    self.logger.error(f"加载或增量训练 {model_type} 模型失败: {str(e)}", exc_info=True)
+                    # 回退到全量训练
+                    self.logger.info(f"回退到全量训练 {model_type} 模型")
+                    model, metrics, _ = self.base_trainer.train_new_model(
+                        model_type=model_type,
+                        X=X,
+                        y=y,
+                        protocol_labels=protocol_labels
+                    )
+                    self._last_full_retrain_time[model_type] = current_time
+                    
+                    # 更新模型选择器的性能记录
+                    self.model_selector.update_performance(
+                        protocol=protocol or "general",
+                        model_type=model_type,
+                        metrics=metrics
+                    )
+            
+            # 保存训练好的模型
+            model_path = self.model_factory.save_model(model, model_type)
+            self.logger.info(f"{protocol_name} 的 {model_type} 模型已保存到: {model_path}")
+            
+        except Exception as e:
+            self.logger.error(f"为 {protocol_name} 训练模型失败: {str(e)}", exc_info=True)
+    
+    def _get_data_time_threshold(self) -> float:
+        """获取数据时间阈值，用于确定新数据范围"""
+        max_history_seconds = self.continuous_config["max_history_days"] * 24 * 3600
+        return time.time() - max_history_seconds
+    
+    def _perform_auto_optimization(
+        self, 
+        model, 
+        model_type: str, 
+        metrics: Dict[str, float], 
+        protocol: Optional[int], 
+        protocol_name: str
+    ):
+        """执行自动优化"""
+        try:
+            self.logger.info(f"开始对 {protocol_name} 的 {model_type} 模型进行自动优化")
+            
+            # 获取特征重要性
+            feature_importance = None
+            if hasattr(model, "get_feature_importance"):
+                try:
+                    feature_importance = model.get_feature_importance()
+                except Exception as e:
+                    self.logger.warning(f"获取特征重要性时出错: {str(e)}")
+            
+            # 基于评估结果进行优化
+            optimization_result = self.feedback_optimizer.optimize_based_on_evaluation(
+                model_type=model_type,
+                evaluation_metrics=metrics,
+                protocol=protocol,
+                feature_importance=feature_importance,
+                model_factory=self.model_factory
+            )
+            
+            # 记录优化建议
+            if optimization_result.get("recommendations"):
+                self.logger.info(
+                    f"{protocol_name} {model_type} 模型优化建议: "
+                    f"{'; '.join(optimization_result['recommendations'])}"
+                )
+            
+            # 保存优化历史
+            self.feedback_optimizer.save_optimization_history()
+            
+        except Exception as e:
+            self.logger.error(f"自动优化过程出错: {str(e)}", exc_info=True)
+    
+    def _load_training_data(
+        self, 
+        protocol: Optional[int], 
+        time_threshold: float
+    ) -> Tuple[np.ndarray, np.ndarray, Optional[List[int]], List[str]]:
+        """加载训练数据"""
+        # 这里应该实现实际的数据加载逻辑
+        # 为简化起见，我们返回空的数据结构
+        # 实际实现应该从data_storage加载数据
+        return np.array([]), np.array([]), None, []
+    
+    def get_status(self) -> Dict[str, any]:
+        """获取持续训练器状态"""
+        return {
+            "is_running": self._is_running,
+            "last_check_time": self._last_check_time,
+            "last_full_retrain_time": self._last_full_retrain_time,
+            "new_data_count": self._new_data_count,
+            "config": self.continuous_config
+        }
+        
+    def trigger_manual_training(
+        self, 
+        model_type: str, 
+        protocol: Optional[int] = None
+    ) -> Tuple[bool, str]:
+        """
+        手动触发模型训练
+            
+        参数:
+            model_type: 模型类型
+            protocol: 协议编号（None表示通用模型）
+                
+        返回:
+            (训练是否成功, 结果信息)
+        """
+        try:
+            protocol_name = "通用模型"
+            if protocol is not None:
+                proto_spec = get_all_protocols().get(protocol)
+                protocol_name = proto_spec["name"] if proto_spec else f"协议_{protocol}"
+                
+            self.logger.info(f"手动触发 {protocol_name} 的 {model_type} 模型训练")
+            self._check_and_train_for_protocol(protocol, protocol_name)
+            return True, f"{protocol_name} 的 {model_type} 模型训练完成"
+        except Exception as e:
+            error_msg = f"手动训练失败: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            return False, error_msg

@@ -1,127 +1,95 @@
 import os
-import typer
-import time
 import signal
-from typing import Optional
-from src.cli.utils import (
-    print_success,
-    print_error,
-    print_info,
-    confirm
-)
-from src.config.config_manager import ConfigManager
+import time
+import psutil
+import typer
+from src.cli.utils import print_success, print_error, print_info, print_warning
 
-def main(
-    pid_file: Optional[str] = typer.Option(
-        None, "--pid-file", "-p",
-        help="PID文件路径"
-    ),
-    config_dir: str = typer.Option(
-        "config", "--config-dir", "-c",
-        help="配置文件目录"
-    ),
-    force: bool = typer.Option(
-        False, "--force", "-f",
-        help="强制终止进程"
-    )
-):
-    """停止异常检测系统"""
-    # 确定PID文件路径
-    if pid_file is None:
-        try:
-            config = ConfigManager(config_dir=config_dir)
-            pid_file = config.get("system.pid_file", "anomaly_detector.pid")
-        except Exception:
-            pid_file = "anomaly_detector.pid"
-    
-    # 检查PID文件是否存在
-    if not os.path.exists(pid_file):
-        print_error(f"未找到PID文件: {pid_file}")
-        if confirm("是否要强制搜索并停止所有相关进程?"):
-            # 简单的进程搜索实现
-            try:
-                import psutil
-                stopped = False
-                for proc in psutil.process_iter(["name", "cmdline"]):
-                    try:
-                        if "anomaly-detector" in proc.name() or \
-                           "anomaly_detector" in " ".join(proc.cmdline()):
-                            print_info(f"找到进程 {proc.pid}，正在终止...")
-                            proc.terminate()
-                            # 等待进程终止
-                            try:
-                                proc.wait(timeout=5)
-                                print_success(f"进程 {proc.pid} 已终止")
-                                stopped = True
-                            except psutil.TimeoutExpired:
-                                if force:
-                                    proc.kill()
-                                    print_success(f"强制终止进程 {proc.pid}")
-                                    stopped = True
-                                else:
-                                    print_error(f"进程 {proc.pid} 未能正常终止，使用--force强制终止")
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-                
-                if stopped:
-                    print_success("所有相关进程已停止")
-                    raise typer.Exit(code=0)
-                else:
-                    print_info("未找到运行中的异常检测系统进程")
-                    raise typer.Exit(code=0)
-            except ImportError:
-                print_error("未安装psutil库，无法搜索进程，请手动指定PID")
-                raise typer.Exit(code=1)
-        else:
-            print_info("停止操作已取消")
-            raise typer.Exit(code=0)
-    
-    # 读取PID
+app = typer.Typer(help="停止运行中的系统进程")
+
+def is_process_running(pid: int) -> bool:
+    """检查指定PID的进程是否正在运行"""
     try:
+        process = psutil.Process(pid)
+        return process.is_running()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+def terminate_process(pid: int, timeout: int = 10) -> bool:
+    """
+    优雅地终止进程
+    
+    Args:
+        pid: 进程ID
+        timeout: 等待超时时间(秒)
+        
+    Returns:
+        是否成功终止
+    """
+    try:
+        process = psutil.Process(pid)
+        
+        # 先尝试优雅终止
+        process.terminate()
+        
+        # 等待进程结束
+        try:
+            process.wait(timeout=timeout)
+            return True
+        except psutil.TimeoutExpired:
+            # 超时则强制终止
+            process.kill()
+            try:
+                process.wait(timeout=3)
+                return True
+            except psutil.TimeoutExpired:
+                return False
+                
+    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+        print_warning(f"无法访问进程 {pid}: {str(e)}")
+        return False
+
+@app.command()
+def main(
+    force: bool = typer.Option(False, "--force", "-f", help="强制终止进程"),
+    pid_file: str = typer.Option("system.pid", "--pid-file", help="PID文件路径")
+):
+    """
+    停止运行中的系统进程
+    """
+    try:
+        # 检查PID文件是否存在
+        if not os.path.exists(pid_file):
+            print_error(f"PID文件不存在: {pid_file}")
+            print_info("系统可能未运行或已异常终止")
+            raise typer.Exit(code=1)
+        
+        # 读取PID
         with open(pid_file, "r") as f:
             pid = int(f.read().strip())
-        print_info(f"找到PID: {pid}")
-    except (ValueError, IOError) as e:
-        print_error(f"读取PID文件失败: {str(e)}")
-        raise typer.Exit(code=1)
-    
-    # 检查进程是否存在
-    try:
-        os.kill(pid, 0)  # 发送0信号检查进程是否存在
-    except OSError:
-        print_error(f"进程 {pid} 不存在，删除无效PID文件")
-        os.remove(pid_file)
-        raise typer.Exit(code=0)
-    
-    # 尝试终止进程
-    try:
+        
+        # 检查进程是否存在
+        if not is_process_running(pid):
+            print_warning(f"进程 {pid} 不存在或已终止")
+            print_info("清理PID文件")
+            os.remove(pid_file)
+            raise typer.Exit(code=0)
+        
         print_info(f"正在终止进程 {pid}...")
-        os.kill(pid, signal.SIGTERM)  # 发送终止信号
         
-        # 等待进程终止
-        timeout = 10
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+        # 终止进程
+        if force:
+            # 强制终止
             try:
-                os.kill(pid, 0)
-                time.sleep(0.5)
-            except OSError:
-                break
-        
-        # 检查是否已终止
-        try:
-            os.kill(pid, 0)
-            if force:
-                print_warning(f"进程 {pid} 未能正常终止，尝试强制终止...")
-                os.kill(pid, signal.SIGKILL)
-                time.sleep(1)
-                try:
-                    os.kill(pid, 0)
-                    print_error(f"强制终止进程 {pid} 失败，请手动处理")
-                    raise typer.Exit(code=1)
-                except OSError:
-                    pass
-            else:
+                process = psutil.Process(pid)
+                process.kill()
+                print_info("已发送强制终止信号")
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                print_error(f"强制终止进程失败: {str(e)}")
+                raise typer.Exit(code=1)
+        else:
+            # 优雅终止
+            if not terminate_process(pid):
                 print_error(f"进程 {pid} 未能正常终止，使用--force强制终止")
                 raise typer.Exit(code=1)
         
@@ -132,6 +100,12 @@ def main(
         print_success(f"进程 {pid} 已成功终止")
     except OSError as e:
         print_error(f"终止进程失败: {str(e)}")
+        raise typer.Exit(code=1)
+    except ValueError as e:
+        print_error(f"PID文件格式错误: {str(e)}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        print_error(f"未知错误: {str(e)}")
         raise typer.Exit(code=1)
 
 if __name__ == "__main__":

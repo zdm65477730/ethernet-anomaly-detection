@@ -1,49 +1,23 @@
-# 模型参数配置（按类型分类，与model_factory和具体模型类对应）
-
-# 传统机器学习模型（traditional_models.py）
-traditional:
-  xgboost:
-    n_estimators: 100               # 树数量
-    max_depth: 6                    # 树深度（防止过拟合）
-    learning_rate: 0.1              # 学习率
-    subsample: 0.8                  # 样本采样比例
-    colsample_bytree: 0.8           # 特征采样比例
-    scale_pos_weight: 10            # 正样本权重（解决不平衡，异常样本少则调大）
-    objective: "binary:logistic"    # 二分类目标函数
-    eval_metric: "logloss"          # 评估指标
-
-  random_forest:
-    n_estimators: 100               # 树数量
-    max_depth: 8                    # 树深度
-    min_samples_split: 10           # 分裂最小样本数
-    min_samples_leaf: 4             # 叶节点最小样本数
-    bootstrap: true                 # 是否bootstrap采样
-    class_weight: "balanced"        # 类别权重
-
-  logistic_regression:
-    penalty: "l2"                   # 正则化方式
-    C: 0.1                         # 正则化强度（值越小正则越强）
-    l1_ratio: 0.5                   # 弹性网混合比例（仅penalty="elasticnet"生效）
-    max_iter: 1000                  # 迭代次数
-
-
-# 深度学习模型（deep_models.py）
-deep:
-  lstm:
-    sequence_length: 30             # 时序序列长度（与temporal_extractor窗口对应）
-    units: [64, 32]                 # LSTM层单元数（两层）
-    dropout: 0.2                    # Dropout比例（防止过拟合）
-    batch_size: 32                  # 批次大小
-    epochs: 20                      # 训练轮次
-    learning_rate: 0.001            # 学习率
-    shuffle: true                   # 是否打乱数据
-    validation_split: 0.2           # 验证集比例
-
-  mlp:
-    hidden_units: [128, 64, 32]     # MLP隐藏层单元数
-    activation: "relu"              # 激活函数
-    dropout: 0.3                    # Dropout比例
-    batch_size: 64                  # 批次大小
-    epochs: 30                      # 训练轮次
-    learning_rate: 0.001            # 学习率
-    batch_normalization: true       # 是否启用批归一化
+xgboost:
+  n_estimators: 100
+  max_depth: 5
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  objective: binary:logistic
+  eval_metric: logloss
+random_forest:
+  n_estimators: 100
+  max_depth: null
+  min_samples_split: 2
+  min_samples_leaf: 1
+  n_jobs: -1
+lstm:
+  input_dim: 10
+  hidden_dim: 32
+  output_dim: 1
+  num_layers: 2
+  dropout: 0.2
+  learning_rate: 0.001
+  batch_size: 32
+  epochs: 10

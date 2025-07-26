@@ -153,7 +153,7 @@ def get_protocol_number(protocol_name):
 
 def get_all_protocols():
     """获取所有支持的协议列表"""
-    return [spec["name"] for spec in PROTOCOL_SPECS.values()]
+    return PROTOCOL_SPECS
 
 def get_protocol_key_features(protocol_num):
     """获取指定协议的关键特征列表"""

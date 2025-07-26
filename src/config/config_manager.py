@@ -6,6 +6,14 @@ from src.utils.logger import get_logger
 class ConfigManager:
     """配置管理器，负责加载、保存和访问配置文件"""
     
+    _instance = None  # 单例实例
+    
+    def __new__(cls, config_dir: str = "config"):
+        # 实现单例模式，确保只创建一个ConfigManager实例
+        if cls._instance is None:
+            cls._instance = super(ConfigManager, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self, config_dir: str = "config"):
         """
         初始化配置管理器
@@ -13,6 +21,10 @@ class ConfigManager:
         Args:
             config_dir: 配置文件目录
         """
+        # 避免重复初始化
+        if hasattr(self, 'config_dir'):
+            return
+            
         self.config_dir = os.path.abspath(config_dir)
         self.logger = get_logger("config_manager")
         

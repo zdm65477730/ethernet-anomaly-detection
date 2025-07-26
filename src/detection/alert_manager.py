@@ -44,6 +44,32 @@ class AlertManager(BaseComponent):
         # 初始化邮件服务器连接
         self.smtp_server = None
         
+    def start(self):
+        """启动告警管理器"""
+        if self.is_running:
+            self.logger.warning("告警管理器已在运行中")
+            return
+            
+        super().start()
+        self.logger.info("告警管理器已启动")
+    
+    def stop(self):
+        """停止告警管理器，清理资源"""
+        if not self.is_running:
+            return
+            
+        super().stop()
+        
+        # 关闭SMTP连接
+        if hasattr(self, 'smtp_server') and self.smtp_server:
+            try:
+                self.smtp_server.quit()
+                self.logger.info("SMTP服务器连接已关闭")
+            except Exception as e:
+                self.logger.error(f"关闭SMTP连接时出错: {str(e)}")
+        
+        self.logger.info("告警管理器已停止")
+    
     def _init_smtp(self):
         """初始化SMTP服务器连接"""
         if not self.smtp_config["enabled"]:
@@ -234,20 +260,6 @@ class AlertManager(BaseComponent):
         )
         
         return recent_anomalies[:limit]
-    
-    def stop(self):
-        """停止告警管理器，清理资源"""
-        super().stop()
-        
-        # 关闭SMTP连接
-        if self.smtp_server:
-            try:
-                self.smtp_server.quit()
-                self.logger.info("SMTP服务器连接已关闭")
-            except Exception as e:
-                self.logger.error(f"关闭SMTP连接时出错: {str(e)}")
-        
-        self.logger.info("告警管理器已停止")
     
     def get_status(self):
         """获取组件状态"""

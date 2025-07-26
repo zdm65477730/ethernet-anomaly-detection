@@ -2,21 +2,26 @@ import time
 import threading
 import logging
 from queue import Queue, Empty
+from typing import Optional, Dict, Any
 from src.system.base_component import BaseComponent
 from src.utils.logger import get_logger
 from src.features.stat_extractor import StatFeatureExtractor
 from src.features.temporal_extractor import TemporalFeatureExtractor
+from src.config.config_manager import ConfigManager
 
 class TrafficAnalyzer(BaseComponent):
     """流量分析器，负责从会话中提取特征并传递给检测模块"""
     
-    def __init__(self, stat_extractor=None, temporal_extractor=None):
+    def __init__(self, stat_extractor: Optional[StatFeatureExtractor] = None, 
+                 temporal_extractor: Optional[TemporalFeatureExtractor] = None):
         super().__init__()
         self.logger = get_logger("traffic_analyzer")
         
-        # 特征提取器，默认创建新实例
-        self.stat_extractor = stat_extractor or StatFeatureExtractor()
-        self.temporal_extractor = temporal_extractor or TemporalFeatureExtractor()
+        # 创建配置管理器实例并传递给特征提取器
+        config = ConfigManager()
+            
+        self.stat_extractor = stat_extractor or StatFeatureExtractor(config=config)
+        self.temporal_extractor = temporal_extractor or TemporalFeatureExtractor(config=config)
         
         self._analysis_thread = None  # 分析线程
         self._feature_queue = Queue(maxsize=1000)  # 特征队列，传递给检测模块
@@ -49,7 +54,7 @@ class TrafficAnalyzer(BaseComponent):
             # 合并特征
             features = {
                 **stat_features,
-                ** temporal_features,
+                **temporal_features,
                 "session_id": session.session_id,
                 "protocol": session.protocol,
                 "timestamp": time.time()
@@ -119,8 +124,15 @@ class TrafficAnalyzer(BaseComponent):
                 self.logger.warning("分析线程未能正常终止")
         
         # 停止特征提取器
-        self.stat_extractor.stop()
-        self.temporal_extractor.stop()
+        try:
+            self.temporal_extractor.stop()
+        except Exception as e:
+            self.logger.error(f"停止时序特征提取器时出错: {str(e)}", exc_info=True)
+            
+        try:
+            self.stat_extractor.stop()
+        except Exception as e:
+            self.logger.error(f"停止统计特征提取器时出错: {str(e)}", exc_info=True)
         
         self.logger.info("流量分析器已停止")
 

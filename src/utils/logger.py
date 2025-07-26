@@ -8,6 +8,8 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../logs"))
 
+# 存储已初始化的记录器名称
+_initialized_loggers = set()
 
 def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """获取指定名称的日志器"""
@@ -15,11 +17,12 @@ def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     logger.setLevel(level)
     
     # 避免重复添加处理器
-    if not logger.handlers:
+    if name not in _initialized_loggers:
         # 控制台处理器
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
         logger.addHandler(console_handler)
+        _initialized_loggers.add(name)
     
     return logger
 
@@ -41,7 +44,7 @@ def setup_rotating_logger(
     logger.setLevel(level)
     
     # 避免重复添加处理器
-    if not any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+    if name not in _initialized_loggers:
         # 轮转文件处理器
         file_handler = RotatingFileHandler(
             log_file,
@@ -51,6 +54,7 @@ def setup_rotating_logger(
         )
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
         logger.addHandler(file_handler)
+        _initialized_loggers.add(name)
     
     return logger
 

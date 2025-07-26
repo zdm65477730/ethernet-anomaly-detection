@@ -1,6 +1,3 @@
-### `docs/architecture.md`（系统架构说明）
-
-```markdown
 # 异常检测系统架构设计
 
 ## 1. 系统概述
@@ -176,6 +173,33 @@ sequenceDiagram
 4. 模型工厂保存模型及版本信息
 5. 模型选择器更新性能记录，用于后续模型选择
 
+### 4.3 系统管理流程
+
+```mermaid
+sequenceDiagram
+    participant CLI as 命令行接口
+    participant Manager as 系统管理器
+    participant Components as 系统组件
+    participant Monitor as 系统监控
+    
+    CLI->>Manager: 启动系统
+    Manager->>Components: 按依赖顺序启动组件
+    Components->>Manager: 组件状态报告
+    Manager->>Monitor: 启动系统监控
+    Monitor->>Manager: 系统状态报告
+    
+    CLI->>Manager: 停止系统
+    Manager->>Manager: 设置停止标志
+    Manager->>Components: 按依赖逆序停止组件
+    Manager->>Monitor: 停止系统监控
+```
+
+1. 系统管理器负责所有组件的生命周期管理
+2. 启动时按依赖关系顺序启动各组件
+3. 运行时监控各组件状态，必要时自动重启
+4. 停止时按依赖关系逆序停止各组件
+5. 系统监控持续报告系统资源使用情况
+
 ## 5. 系统部署架构
 
 系统支持单机部署和分布式部署两种模式：
@@ -188,4 +212,128 @@ sequenceDiagram
 - 内存：8GB及以上
 - 存储：至少100GB可用空间
 - 操作系统：Linux（推荐Ubuntu 20.04+）
+
+## 6. 组件依赖关系
+
+系统各组件之间存在明确的依赖关系，确保系统稳定运行：
+
+```mermaid
+graph TD
+    A[PacketCapture] --> B[SessionTracker]
+    B --> C[TrafficAnalyzer]
+    C --> D[AnomalyDetector]
+    D --> E[AlertManager]
+    E --> F[FeedbackProcessor]
+    C --> G[StatFeatureExtractor]
+    C --> H[TemporalFeatureExtractor]
+    D --> I[ModelFactory]
+    D --> J[ModelSelector]
+    K[SystemMonitor] --> L[BaseComponent]
+    A --> L
+    B --> L
+    C --> L
+    D --> L
+    E --> L
+    F --> L
+    G --> L
+    H --> L
+    I --> L
+    J --> L
+```
+
+组件启动顺序：
+1. `SystemMonitor` - 系统监控
+2. `PacketCapture` - 数据包捕获
+3. `SessionTracker` - 会话跟踪
+4. `StatFeatureExtractor` - 统计特征提取
+5. `TemporalFeatureExtractor` - 时序特征提取
+6. `TrafficAnalyzer` - 流量分析
+7. `ModelFactory` - 模型工厂
+8. `ModelSelector` - 模型选择器
+9. `AnomalyDetector` - 异常检测器
+10. `AlertManager` - 告警管理器
+11. `FeedbackProcessor` - 反馈处理器
+
+组件停止顺序（与启动顺序相反）：
+1. `FeedbackProcessor` - 反馈处理器
+2. `AlertManager` - 告警管理器
+3. `AnomalyDetector` - 异常检测器
+4. `ModelSelector` - 模型选择器
+5. `ModelFactory` - 模型工厂
+6. `TrafficAnalyzer` - 流量分析
+7. `TemporalFeatureExtractor` - 时序特征提取
+8. `StatFeatureExtractor` - 统计特征提取
+9. `SessionTracker` - 会话跟踪
+10. `PacketCapture` - 数据包捕获
+11. `SystemMonitor` - 系统监控
+
+## 7. 系统停止机制
+
+系统采用优雅停止机制，确保在停止过程中：
+
+1. **设置停止标志**：SystemManager设置_stopping标志，防止组件重启
+2. **按序停止组件**：按照依赖关系逆序停止各组件
+3. **等待线程结束**：确保所有后台线程正常终止
+4. **释放资源**：各组件清理占用的系统资源
+5. **记录日志**：详细记录停止过程中的关键步骤
+
+这种机制确保系统在任何情况下都能安全、完整地停止，避免数据丢失或资源泄露。
+
+## 8. 命令行接口
+
+系统提供统一的命令行接口，所有操作均通过`anomaly-detector`命令执行。根据实际代码结构（cli/目录），更新命令格式如下：
+
+### 8.1 系统管理命令
+
+```bash
+# 初始化系统
+python -m cli.system init
+
+# 启动系统
+python -m cli.system start
+
+# 停止系统
+python -m cli.system stop
+
+# 查看系统状态
+python -m cli.system status
+```
+
+### 8.2 模型训练命令
+
+```bash
+# 单次训练
+python -m cli.model train --mode once
+
+# 持续训练
+python -m cli.model train --mode continuous
+
+# 评估模型
+python -m cli.model evaluate
+
+# 优化模型
+python -m cli.model optimize
+
+# AutoML训练
+python -m cli.model automl
+```
+
+### 8.3 模型管理命令
+
+```bash
+# 查看模型列表
+python -m cli.model list
+
+# 切换模型版本
+python -m cli.model use --type xgboost --version 20230615_1230
+```
+
+### 8.4 告警管理命令
+
+```bash
+# 查看告警列表
+python -m cli.alert list
+
+# 处理告警反馈
+python -m cli.alert feedback --alert-id ALERT_12345 --correct
 ```

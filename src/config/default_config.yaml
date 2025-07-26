@@ -1,0 +1,206 @@
+# 系统配置文件
+
+# 网络配置
+network:
+  # 默认网络接口
+  interface: "eth0"
+  
+  # 默认BPF过滤规则（空表示捕获所有流量）
+  filter: ""
+  
+  # 每秒最大抓包数（0表示无限制）
+  capture_limit: 1000
+
+# 模型配置
+model:
+  # 模型文件存储目录
+  models_dir: "models"
+  
+  # 默认模型类型
+  default_type: "xgboost"
+  
+  # 异常检测阈值（0-1之间）
+  threshold: 0.7
+  
+  # 协议特定阈值
+  protocol_thresholds:
+    6: 0.6    # TCP协议阈值
+    17: 0.8   # UDP协议阈值
+    1: 0.9    # ICMP协议阈值
+
+# 数据配置
+data:
+  # 原始数据存储目录
+  raw_dir: "data/raw"
+  
+  # 处理后的特征数据目录
+  processed_dir: "data/processed"
+  
+  # 测试数据目录
+  test_dir: "data/test"
+  
+  # 反馈数据目录
+  feedback_dir: "data/feedback"
+  
+  # 最大保留天数
+  retention_days: 30
+
+# 训练配置
+training:
+  # 测试集比例
+  test_size: 0.2
+  
+  # 交叉验证折数
+  cross_validation_folds: 5
+  
+  # 随机种子
+  random_state: 42
+  
+  # 评估报告目录
+  report_dir: "reports/evaluations"
+  
+  # 每个协议的最小样本数阈值
+  min_samples_per_protocol: 50
+  
+  # 持续训练配置
+  continuous:
+    # 检查新数据的时间间隔（秒）
+    check_interval: 3600
+    
+    # 触发训练的最小新样本数
+    min_samples: 1000
+    
+    # 使用的最大历史数据天数
+    max_history_days: 30
+    
+    # 全量重训间隔（秒）
+    retrain_full_interval: 604800  # 7天
+    
+    # 协议特定模型映射
+    protocol_model_map:
+      6: "lstm"      # TCP使用LSTM
+      17: "xgboost"  # UDP使用XGBoost
+      1: "mlp"       # ICMP使用MLP
+    
+    # 启用自动优化
+    enable_auto_optimization: true
+  
+  # 增量训练配置
+  incremental:
+    # 批次大小
+    batch_size: 1024
+    
+    # 最小样本数阈值
+    min_samples: 1000
+    
+    # 评估间隔（批次）
+    evaluation_interval: 5
+    
+    # 重训阈值（性能下降超过此值时全量重训）
+    retrain_threshold: 0.1
+  
+  # 反馈优化配置
+  feedback:
+    # 启用特征工程优化
+    enable_feature_optimization: true
+    
+    # 启用模型优化
+    enable_model_optimization: true
+    
+    # 性能阈值（低于此值需要优化）
+    performance_threshold: 0.7
+    
+    # 改进阈值（期望的最小改进）
+    improvement_threshold: 0.05
+    
+    # 最大优化轮数
+    max_optimization_rounds: 3
+    
+    # 优化所需的最小样本数
+    min_samples_for_optimization: 1000
+  
+  # AutoML配置
+  automl:
+    # 最大迭代轮数
+    max_iterations: 10
+    
+    # 目标F1分数
+    target_f1_score: 0.9
+    
+    # 最小改进阈值
+    improvement_threshold: 0.01
+    
+    # 最大训练时间（秒）
+    max_training_time: 86400  # 24小时
+    
+    # 启用特征工程优化
+    enable_feature_optimization: true
+    
+    # 启用模型参数优化
+    enable_model_optimization: true
+    
+    # 启用超参数调优
+    enable_hyperparameter_tuning: true
+
+# 检测配置
+detection:
+  # 特征队列最大大小
+  feature_queue_max_size: 1000
+  
+  # 窗口大小（秒）
+  window_size: 60
+  
+  # 窗口步长（秒）
+  window_step: 10
+
+# 告警配置
+alert:
+  # 是否启用告警
+  enabled: true
+  
+  # 告警阈值
+  threshold: 0.7
+  
+  # 告警间隔（秒）
+  interval: 60
+  
+  # 告警报告目录
+  reports_dir: "reports/anomalies"
+  
+  # 启用SMTP邮件通知
+  smtp_enabled: false
+  
+  # SMTP配置（如果启用）
+  smtp:
+    server: "smtp.example.com"
+    port: 587
+    username: "alerts@example.com"
+    password: "your_password"
+    use_tls: true
+    recipients:
+      - "admin@example.com"
+
+# 监控配置
+monitoring:
+  # 监控间隔（秒）
+  interval: 10
+  
+  # 监控日志文件
+  log_path: "logs/monitor.log"
+
+# 日志配置
+logging:
+  # 日志级别（DEBUG, INFO, WARNING, ERROR, CRITICAL）
+  level: "INFO"
+  
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 日志文件
+  file: "logs/system.log"
+  
+  # 最大日志文件大小（MB）
+  max_size: 10
+  
+  # 保留的日志文件数量
+  backup_count: 5

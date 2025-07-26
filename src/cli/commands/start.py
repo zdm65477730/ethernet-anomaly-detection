@@ -13,7 +13,7 @@ from src.cli.utils import (
 )
 from src.system.system_manager import SystemManager
 from src.config.config_manager import ConfigManager
-from src.utils.logger import setup_logging
+from src.utils.logger import init_logger
 
 def is_process_running(pid_file: str) -> bool:
     """检查系统是否已在运行"""
@@ -124,7 +124,7 @@ def main(
     
     # 配置日志
     log_level = log_level or config.get("system.log_level", "INFO")
-    setup_logging(log_level=log_level)
+    init_logger(level=10 if log_level == "DEBUG" else 20)  # 10=DEBUG, 20=INFO
     
     # 写入PID文件
     write_pid_file(pid_file)
@@ -144,13 +144,18 @@ def main(
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
     
+    system_started = False
     try:
         print_info(f"正在启动异常检测系统，监听接口: {interface}")
         if filter:
             print_info(f"使用BPF过滤规则: {filter}")
             
-        system_manager.start(interface=interface, bpf_filter=filter)
-        print_success("系统启动成功")
+        system_started = system_manager.start(interface=interface, bpf_filter=filter)
+        if system_started:
+            print_success("系统启动成功")
+        else:
+            print_error("系统启动失败")
+            raise typer.Exit(code=1)
         
         # 运行中
         try:
@@ -161,7 +166,8 @@ def main(
             system_manager.stop()
             
     except Exception as e:
-        print_error(f"系统启动失败: {str(e)}")
+        if not system_started:
+            print_error(f"系统启动失败: {str(e)}")
         system_manager.stop()
         raise typer.Exit(code=1)
     finally:

@@ -2,201 +2,214 @@ import pcapy
 import dpkt
 import time
 import threading
-import logging
-from queue import Queue, Empty
+import traceback
+from typing import Optional, Callable, Any
 from src.system.base_component import BaseComponent
 from src.utils.logger import get_logger
 
+# 尝试导入pcapy-ng，如果失败则导入pcapy
+try:
+    import pcapy_ng as pcapy
+except ImportError:
+    import pcapy
+
 class PacketCapture(BaseComponent):
-    """基于pcapy的网络数据包捕获组件，负责实时抓包并解析协议"""
+    """数据包捕获组件，负责从网络接口捕获数据包并进行初步处理"""
     
-    def __init__(self):
+    def __init__(self, interface: str = "eth0", bpf_filter: Optional[str] = None):
         super().__init__()
         self.logger = get_logger("packet_capture")
-        self.interface = None  # 网络接口
-        self.bpf_filter = None  # BPF过滤规则
-        self.pcap = None  # pcapy捕获对象
-        self.packet_queue = Queue(maxsize=10000)  # 数据包队列，防止阻塞
-        self._capture_thread = None  # 抓包线程
-        self._is_capturing = False  # 抓包状态标志
+        self.interface = interface
+        self.bpf_filter = bpf_filter
         
-        # 协议类型映射
-        self.protocol_map = {
-            1: "icmp",
-            6: "tcp",
-            17: "udp"
+        # 数据包捕获参数
+        self.snaplen = 65535  # 最大捕获长度
+        self.promisc = 1      # 混杂模式
+        self.timeout = 100    # 超时时间(ms)
+        
+        # pcapy对象
+        self.pcap: Optional[pcapy.PcapObject] = None
+        
+        # 数据包处理队列
+        self.packet_queue = []
+        self.max_queue_size = 10000
+        
+        # 捕获线程
+        self._capture_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        
+        # 统计信息
+        self.stats = {
+            "packets_captured": 0,
+            "packets_dropped": 0,
+            "queue_size": 0
         }
-
-    def set_interface(self, interface):
+    
+    def set_interface(self, interface: str) -> None:
         """设置网络接口"""
         self.interface = interface
-        return self
-
-    def set_filter(self, bpf_filter):
+        
+    def set_filter(self, bpf_filter: str) -> None:
         """设置BPF过滤规则"""
         self.bpf_filter = bpf_filter
-        return self
-
-    def get_next_packet(self, timeout=1):
-        """从队列获取下一个数据包"""
-        try:
-            return self.packet_queue.get(timeout=timeout)
-        except Empty:
-            return None
-
-    def _packet_handler(self, header, data):
-        """pcapy回调函数，处理捕获的数据包"""
-        if not self._is_running or not self._is_capturing:
-            return
-            
-        try:
-            # 解析以太网帧
-            eth = dpkt.ethernet.Ethernet(data)
-            
-            # 解析IP包
-            if not isinstance(eth.data, dpkt.ip.IP):
-                self.logger.debug("非IP数据包，跳过")
-                return
+        if self.pcap and self.bpf_filter:
+            try:
+                self.pcap.setfilter(self.bpf_filter)
+            except Exception as e:
+                self.logger.error(f"设置BPF过滤规则失败: {e}")
+    
+    def _capture_loop(self) -> None:
+        """数据包捕获循环"""
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
+        while not self._stop_event.is_set():
+            try:
+                # 尝试打开网络接口
+                self.pcap = pcapy.open_live(
+                    self.interface,
+                    self.snaplen,
+                    self.promisc,
+                    self.timeout
+                )
                 
-            ip = eth.data
-            
-            # 构建数据包信息字典
-            packet_info = {
-                "timestamp": header.getts()[0] + header.getts()[1] / 1e6,  # 时间戳
-                "length": len(data),  # 包长度
-                "ethernet": {
-                    "src": dpkt.utils.mac_to_str(eth.src),
-                    "dst": dpkt.utils.mac_to_str(eth.dst),
-                    "type": eth.type
-                },
-                "ip": {
-                    "src": dpkt.utils.inet_to_str(ip.src),
-                    "dst": dpkt.utils.inet_to_str(ip.dst),
-                    "protocol": ip.p,
-                    "protocol_name": self.protocol_map.get(ip.p, f"unknown({ip.p})"),
-                    "len": ip.len,
-                    "ttl": ip.ttl
-                }
-            }
-            
-            # 解析传输层协议
-            if ip.p == dpkt.ip.IP_PROTO_TCP:
-                tcp = ip.data
-                packet_info["transport"] = {
-                    "src_port": tcp.sport,
-                    "dst_port": tcp.dport,
-                    "flags": tcp.flags,
-                    "seq": tcp.seq,
-                    "ack": tcp.ack,
-                    "winsize": tcp.win
-                }
-                packet_info["payload"] = tcp.data
-                
-            elif ip.p == dpkt.ip.IP_PROTO_UDP:
-                udp = ip.data
-                packet_info["transport"] = {
-                    "src_port": udp.sport,
-                    "dst_port": udp.dport,
-                    "length": udp.len
-                }
-                packet_info["payload"] = udp.data
-                
-            elif ip.p == dpkt.ip.IP_PROTO_ICMP:
-                icmp = ip.data
-                packet_info["transport"] = {
-                    "type": icmp.type,
-                    "code": icmp.code
-                }
-                packet_info["payload"] = icmp.data
-            
-            # 将解析后的数据包放入队列
-            if not self.packet_queue.full():
-                self.packet_queue.put(packet_info)
-            else:
-                self.logger.warning("数据包队列已满，丢弃数据包")
-                
-        except Exception as e:
-            self.logger.error(f"解析数据包出错: {str(e)}", exc_info=True)
-
-    def _capture_loop(self):
-        """抓包循环"""
-        try:
-            # 打开网络接口
-            if not self.interface:
-                # 如果未指定接口，使用第一个可用接口
-                devs = pcapy.findalldevs()
-                if not devs:
-                    self.logger.error("未找到可用网络接口")
-                    return
-                self.interface = devs[0]
-                self.logger.info(f"未指定接口，使用默认接口: {self.interface}")
-            
-            # 打开接口，设置缓冲区大小和超时
-            self.pcap = pcapy.open_live(
-                self.interface,
-                65536,  # 最大包长度
-                1,      # 混杂模式
-                100     # 超时时间(ms)
-            )
-            
-            # 设置过滤规则
-            if self.bpf_filter:
-                try:
+                # 设置BPF过滤规则
+                if self.bpf_filter:
                     self.pcap.setfilter(self.bpf_filter)
-                    self.logger.info(f"已设置BPF过滤规则: {self.bpf_filter}")
-                except Exception as e:
-                    self.logger.error(f"设置过滤规则失败: {str(e)}")
-                    return
-            
-            self._is_capturing = True
-            self.logger.info(f"开始在接口 {self.interface} 上捕获数据包")
-            
-            # 开始捕获
-            while self._is_running and self._is_capturing:
-                self.pcap.dispatch(100, self._packet_handler)  # 一次处理100个包
                 
-        except Exception as e:
-            self.logger.error(f"抓包循环出错: {str(e)}", exc_info=True)
-        finally:
-            self._is_capturing = False
-            self.pcap = None
-            self.logger.info("抓包循环已停止")
-
-    def start(self):
-        """启动抓包组件"""
-        if self._is_running:
+                self.logger.info(f"成功打开网络接口: {self.interface}")
+                consecutive_errors = 0  # 重置错误计数
+                
+                # 开始捕获数据包
+                while not self._stop_event.is_set():
+                    try:
+                        # 读取数据包
+                        header, packet = self.pcap.next()
+                        if header and packet:
+                            # 添加到队列
+                            if len(self.packet_queue) < self.max_queue_size:
+                                self.packet_queue.append((header, packet))
+                                self.stats["packets_captured"] += 1
+                            else:
+                                self.stats["packets_dropped"] += 1
+                                
+                            # 更新队列大小统计
+                            self.stats["queue_size"] = len(self.packet_queue)
+                            
+                    except Exception as e:
+                        self.logger.error(f"读取数据包时出错: {e}")
+                        break
+                        
+            except pcapy.PcapError as e:
+                consecutive_errors += 1
+                error_msg = str(e)
+                
+                # 只记录前几次错误，避免日志刷屏
+                if consecutive_errors <= 3:
+                    self.logger.error(f"抓包循环出错: {self.interface}: {error_msg}", exc_info=True)
+                
+                # 特别处理权限问题
+                if "Operation not permitted" in error_msg or "permission" in error_msg.lower():
+                    self.logger.warning(
+                        f"没有权限捕获 {self.interface} 接口的数据包。"
+                        "请使用 sudo 运行程序，或将当前用户添加到 pcap/wireshark 用户组。"
+                    )
+                    # 权限问题通常无法自动恢复，所以停止尝试
+                    break
+                
+                # 如果连续错误太多，停止尝试
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.error(
+                        f"连续 {max_consecutive_errors} 次尝试打开接口失败，停止尝试"
+                    )
+                    break
+                    
+                # 等待一段时间再重试
+                time.sleep(2)
+                
+            except Exception as e:
+                consecutive_errors += 1
+                self.logger.error(f"抓包循环出现未预期错误: {e}", exc_info=True)
+                
+                # 如果连续错误太多，停止尝试
+                if consecutive_errors >= max_consecutive_errors:
+                    self.logger.error(
+                        f"连续 {max_consecutive_errors} 次尝试打开接口失败，停止尝试"
+                    )
+                    break
+                    
+                time.sleep(2)
+            
+            finally:
+                # 清理pcap对象
+                if self.pcap:
+                    try:
+                        self.pcap.close()
+                    except:
+                        pass
+                    self.pcap = None
+        
+        self.logger.info("抓包循环已停止")
+    
+    def start(self) -> None:
+        """启动数据包捕获"""
+        if self.is_running:
             self.logger.warning("抓包组件已在运行中")
             return
             
         super().start()
-        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        
+        # 启动捕获线程
+        self._stop_event.clear()
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop,
+            daemon=True,
+            name="PacketCaptureThread"
+        )
         self._capture_thread.start()
+        
         self.logger.info("抓包组件已启动")
-
-    def stop(self):
-        """停止抓包组件"""
-        if not self._is_running:
+    
+    def stop(self) -> None:
+        """停止数据包捕获"""
+        if not self.is_running:
             return
             
-        self._is_capturing = False
-        super().stop()
+        # 停止捕获线程
+        self._stop_event.set()
         
+        # 等待线程结束
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=5)
             if self._capture_thread.is_alive():
                 self.logger.warning("抓包线程未能正常终止")
-        
+            
+        # 清理资源
+        if self.pcap:
+            try:
+                self.pcap.close()
+            except Exception as e:
+                self.logger.error(f"关闭pcap对象时出错: {e}")
+            self.pcap = None
+            
+        super().stop()
         self.logger.info("抓包组件已停止")
-
-    def get_status(self):
+    
+    def get_next_packet(self) -> Optional[tuple]:
+        """获取下一个数据包"""
+        if self.packet_queue:
+            return self.packet_queue.pop(0)
+        return None
+    
+    def get_status(self) -> dict:
         """获取组件状态"""
         status = super().get_status()
         status.update({
             "interface": self.interface,
             "filter": self.bpf_filter,
-            "is_capturing": self._is_capturing,
-            "queue_size": self.packet_queue.qsize(),
-            "queue_max_size": self.packet_queue.maxsize
+            "is_capturing": self.pcap is not None,
+            "queue_size": len(self.packet_queue),
+            "queue_max_size": self.max_queue_size,
+            "stats": self.stats.copy()
         })
         return status
-    

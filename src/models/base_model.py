@@ -1,6 +1,6 @@
 import abc
 import time
-from typing import Optional, Dict, Union
+from typing import Optional, Dict, Union, Any
 import numpy as np
 import pandas as pd
 from src.utils.logger import get_logger
@@ -106,7 +106,7 @@ class BaseModel(metaclass=abc.ABCMeta):
         """
         raise NotImplementedError("子类必须实现load方法")
 
-    def get_metadata(self) -> Dict[str, any]:
+    def get_metadata(self) -> Dict[str, Any]:
         """返回模型元数据"""
         return {
             "model_type": self.model_type,

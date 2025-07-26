@@ -19,7 +19,9 @@ app.command(name="init", help="初始化系统配置和目录结构")(init_cmd.m
 app.command(name="start", help="启动异常检测系统")(start_cmd.main)
 app.command(name="stop", help="停止异常检测系统")(stop_cmd.main)
 app.command(name="status", help="查看系统运行状态")(status_cmd.main)
-app.command(name="train", help="模型训练相关操作")(train_cmd.main)
+
+# 添加train子应用
+app.add_typer(train_cmd.train_app)
 
 @app.callback()
 def main_callback(
@@ -29,14 +31,10 @@ def main_callback(
         is_eager=True
     )
 ):
-    """
-    实时以太网异常检测系统
-    
-    用于监控网络流量，检测异常行为，支持持续学习和模型优化。
-    """
+    """主回调函数，处理全局选项"""
     if version:
         from src import __version__
-        print(f"异常检测系统 v{__version__}")
+        print_info(f"异常检测系统版本: {__version__}")
         raise typer.Exit()
 
 if __name__ == "__main__":

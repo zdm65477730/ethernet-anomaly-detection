@@ -5,13 +5,15 @@ from typing import Optional, Dict, Any
 from src.utils.logger import get_logger
 from src.config.config_manager import ConfigManager
 from src.features.protocol_specs import get_protocol_spec, get_protocol_number
+from src.system.base_component import BaseComponent
 
-class ModelSelector:
+class ModelSelector(BaseComponent):
     """模型选择器，根据协议类型和历史性能选择最优模型"""
     
     def __init__(self, config=None):
-        self.logger = get_logger("model_selector")
+        super().__init__()
         self.config = config or ConfigManager()
+        self.logger = get_logger("model_selector")
         
         # 模型性能历史记录路径
         self.models_dir = self.config.get("model.models_dir", "models")
@@ -29,6 +31,41 @@ class ModelSelector:
         self._best_model_cache = {}
         self._cache_expiry = 300  # 缓存过期时间(秒)
         self._cache_update_time = time.time()
+    
+    def get_status(self) -> Dict[str, any]:
+        """
+        获取组件状态信息
+        
+        返回:
+            包含组件状态的字典
+        """
+        status = super().get_status()
+        status.update({
+            "performance_history_size": len(self.performance_history),
+            "cache_size": len(self._best_model_cache),
+            "models_dir": self.models_dir
+        })
+        return status
+    
+    def start(self) -> None:
+        """启动模型选择器"""
+        if self.is_running:
+            self.logger.warning("模型选择器已在运行中")
+            return
+            
+        super().start()
+        self.logger.info("模型选择器已启动")
+    
+    def stop(self) -> None:
+        """停止模型选择器"""
+        if not self.is_running:
+            return
+            
+        # 保存性能历史记录
+        self._save_performance_history()
+        
+        super().stop()
+        self.logger.info("模型选择器已停止")
     
     def _load_performance_history(self) -> Dict[str, Dict[str, Dict[str, float]]]:
         """
@@ -232,16 +269,3 @@ class ModelSelector:
         
         # 清除缓存
         self._invalidate_cache()
-    
-    def get_status(self) -> Dict[str, Any]:
-        """获取组件状态"""
-        protocol_count = len(self.performance_history)
-        total_model_entries = sum(len(models) for models in self.performance_history.values())
-        
-        return {
-            "performance_history_path": self.performance_history_path,
-            "protocol_count": protocol_count,
-            "total_model_entries": total_model_entries,
-            "cache_size": len(self._best_model_cache),
-            "cache_valid": (time.time() - self._cache_update_time) < self._cache_expiry
-        }

@@ -9,8 +9,7 @@ from src.cli.utils import (
     print_info,
     confirm,
     create_directories,
-    get_available_interfaces,
-    validate_file_path
+    get_available_interfaces
 )
 from src.config.config_manager import ConfigManager
 

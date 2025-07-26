@@ -1,223 +1,154 @@
-# 异常检测系统API参考文档
+# API参考文档
 
-## 1. 概述
+## 1. 系统架构概述
 
-本文档详细描述异常检测系统的核心API接口，涵盖类定义、方法参数、返回值及使用示例。系统采用面向对象设计模式，各模块通过标准化接口交互，确保扩展性与易用性。所有API均基于Python 3.8+实现，兼容主流操作系统（Linux/macOS）。
+异常检测系统采用模块化设计，包含以下核心模块：
+
+1. **数据采集模块** (`src/capture/`) - 实时捕获和解析网络数据包
+2. **特征提取模块** (`src/features/`) - 从原始流量中提取统计和时序特征
+3. **模型模块** (`src/models/`) - 提供多种机器学习模型实现
+4. **训练模块** (`src/training/`) - 实现模型训练、评估和优化逻辑
+5. **检测模块** (`src/detection/`) - 执行实时异常检测
+6. **配置管理模块** (`src/config/`) - 管理系统配置参数
+7. **工具模块** (`src/utils/`) - 提供通用工具函数
+
+```mermaid
+graph TD
+    A[数据采集层] --> B[特征提取层]
+    B --> C[模型层]
+    C --> D[检测层]
+    D --> E[告警层]
+    F[配置管理层] --> A
+    F --> B
+    F --> C
+    F --> D
+    G[训练层] --> C
+```
 
 ## 2. 数据采集模块（`src/capture/`）
 
 ### 2.1 `PacketCapture`类
-**功能**：实时捕获并解析网络数据包，支持协议解析与过滤。
+**功能**：基于libpcap库捕获网络数据包。
 
 #### 初始化
 ```python
 from src.capture.packet_capture import PacketCapture
 
+# 基本初始化
 capture = PacketCapture(
-    interface: str = "eth0",        # 网络接口名称
-    filter: str = "",               # BPF过滤规则（如"tcp port 80"）
-    buffer_size: int = 65535,       # 抓包缓冲区大小（字节）
-    timeout: int = 100              # 抓包超时时间（毫秒）
+    interface: str = "eth0",     # 网络接口
+    bpf_filter: str = "",        # BPF过滤规则
+    buffer_size: int = 1048576,  # 缓冲区大小(字节)
+    snaplen: int = 65535,        # 最大捕获长度
+    promiscuous: bool = False    # 混杂模式
 )
 ```
 
 #### 核心方法
-
-**`start()`**
 ```python
-def start(self) -> None:
-    """启动抓包线程，开始监听网络接口"""
-```
+def start_capture(self) -> None:
+    """开始捕获数据包"""
 
-**`stop()`**
-```python
-def stop(self) -> None:
-    """停止抓包线程，释放网络接口资源"""
-```
+def stop_capture(self) -> None:
+    """停止捕获数据包"""
 
-**`get_packet()`**
-```python
-def get_packet(
-    self,
-    block: bool = True,             # 是否阻塞等待数据包
-    timeout: Optional[float] = None # 超时时间（秒）
-) -> Optional[Dict]:
+def set_packet_handler(self, handler: Callable[[dict], None]) -> None:
     """
-    获取解析后的数据包
+    设置数据包处理回调函数
     
-    返回: 数据包字典（含协议字段）或None（超时）
+    参数:
+        handler: 回调函数，接收解析后的数据包字典
     """
+
+def get_capture_stats(self) -> Dict[str, int]:
+    """获取捕获统计信息"""
 ```
 
-**数据包结构示例**：
-```python
-{
-    "timestamp": 1620000000.123456,  # 时间戳（秒）
-    "src_ip": "192.168.1.100",      # 源IP地址
-    "dst_ip": "8.8.8.8",             # 目的IP地址
-    "src_port": 12345,              # 源端口
-    "dst_port": 80,                 # 目的端口
-    "protocol": 6,                  # 协议编号（6=TCP,17=UDP,1=ICMP）
-    "length": 1500,                 # 数据包长度（字节）
-    "tcp_flags": {                   # TCP标志位（仅TCP协议存在）
-        "SYN": True,
-        "ACK": False,
-        "FIN": False
-    }
-}
-```
-
-
-### 2.2 `SessionTracker`类
-**功能**：按网络会话聚合数据包，维护会话状态与统计信息。
+### 2.2 `TrafficAnalyzer`类
+**功能**：协调数据包捕获和会话跟踪流程。
 
 #### 初始化
 ```python
-from src.capture.session_tracker import SessionTracker
+from src.capture.traffic_analyzer import TrafficAnalyzer
 
-tracker = SessionTracker(
-    timeout: int = 300  # 会话超时时间（秒），无活动则自动清理
+analyzer = TrafficAnalyzer(
+    packet_capture: PacketCapture,    # 数据包捕获器
+    session_tracker: SessionTracker,  # 会话跟踪器
+    stat_extractor: StatFeatureExtractor,    # 统计特征提取器
+    temporal_extractor: TemporalFeatureExtractor  # 时序特征提取器
 )
 ```
 
 #### 核心方法
-
-**`track_packet()`**
 ```python
-def track_packet(self, packet: Dict) -> Tuple[str, Dict]:
-    """
-    跟踪数据包并更新会话状态
-    
-    参数:
-        packet: 解析后的数据包字典（来自PacketCapture）
-    
-    返回:
-        会话ID（五元组哈希）和会话信息字典
-    """
-```
+def start_analysis(self) -> None:
+    """启动流量分析"""
 
-**`get_session()`**
-```python
-def get_session(self, session_id: str) -> Optional[Dict]:
-    """
-    获取指定会话的详细信息
-    
-    返回: 包含包数、字节数、持续时间等的会话字典
-    """
-```
+def stop_analysis(self) -> None:
+    """停止流量分析"""
 
-**`cleanup_expired()`**
-```python
-def cleanup_expired(self) -> int:
-    """
-    清理超时会话
-    
-    返回: 被清理的会话数量
-    """
+def get_analysis_stats(self) -> Dict[str, Any]:
+    """获取分析统计信息"""
 ```
-
 
 ## 3. 特征提取模块（`src/features/`）
 
 ### 3.1 `StatFeatureExtractor`类
-**功能**：从会话数据中提取统计特征（如包大小分布、协议占比等）。
+**功能**：提取流量的统计特征。
 
-#### 核心方法
+#### 初始化
 ```python
 from src.features.stat_extractor import StatFeatureExtractor
 
-extractor = StatFeatureExtractor()
+extractor = StatFeatureExtractor(
+    config: ConfigManager = None  # 配置管理器
+)
+```
 
-def extract_features_from_session(self, session: Dict) -> Dict[str, float]:
+#### 核心方法
+```python
+def extract_features(self, session_data: Dict[str, Any]) -> Dict[str, float]:
     """
-    提取会话的统计特征
+    从会话数据中提取统计特征
     
     参数:
-        session: 会话信息字典（来自SessionTracker）
-    
+        session_data: 会话数据字典
+        
     返回:
-        特征字典，示例：
-        {
-            "packet_count": 42,            # 包总数
-            "total_bytes": 15600,          # 总字节数
-            "avg_packet_size": 371.43,     # 平均包大小
-            "tcp_syn_count": 1,            # TCP SYN包数量
-            "protocol_ratio": 0.85         # 主协议占比
-        }
+        特征字典
     """
 ```
 
-
 ### 3.2 `TemporalFeatureExtractor`类
-**功能**：提取时序特征（如流量速率、包到达间隔等），支持多时间窗口。
+**功能**：提取流量的时序特征。
 
 #### 初始化
 ```python
 from src.features.temporal_extractor import TemporalFeatureExtractor
 
 extractor = TemporalFeatureExtractor(
-    window_sizes: List[int] = [10, 60, 300]  # 时间窗口（秒）
+    window_size: int = 60,   # 时间窗口大小(秒)
+    window_step: int = 10    # 窗口步长(秒)
 )
 ```
 
 #### 核心方法
 ```python
-def extract_features_from_session(self, session: Dict) -> Dict[str, float]:
+def extract_features(self, packet_stream: List[Dict]) -> Dict[str, float]:
     """
-    提取会话的时序特征
+    从数据包流中提取时序特征
     
+    参数:
+        packet_stream: 数据包流列表
+        
     返回:
-        特征字典，示例：
-        {
-            "packet_rate_10s": 5.2,        # 10秒窗口内的包速率
-            "byte_rate_60s": 1200.5,       # 60秒窗口内的字节速率
-            "inter_arrival_std": 0.87      # 包到达间隔标准差
-        }
+        时序特征字典
     """
 ```
-
 
 ## 4. 模型模块（`src/models/`）
 
-### 4.1 `ModelFactory`类
-**功能**：模型工厂类，负责模型的创建、保存、加载与版本管理。
-
-#### 核心方法
-```python
-from src.models.model_factory import ModelFactory
-
-factory = ModelFactory()
-
-def create_model(self, model_type: str, **kwargs) -> BaseModel:
-    """
-    创建指定类型的模型实例
-    
-    参数:
-        model_type: 模型类型，支持：
-            - "xgboost"：XGBoost模型
-            - "random_forest"：随机森林
-            - "logistic_regression"：逻辑回归
-            - "lstm"：长短期记忆网络
-            - "mlp"：多层感知器
-       ** kwargs: 模型参数（见model_config.yaml）
-    
-    返回:
-        模型实例（继承自BaseModel）
-    """
-
-def save_model(self, model: BaseModel) -> str:
-    """
-    保存模型至文件系统
-    
-    返回: 模型保存路径（含时间戳与版本信息）
-    """
-
-def load_latest_model(self, model_type: str) -> BaseModel:
-    """加载指定类型的最新模型版本"""
-```
-
-
-### 4.2 `BaseModel`抽象类
+### 4.1 `BaseModel`抽象类
 **功能**：所有模型的基类，定义统一接口（训练/预测/评估）。
 
 #### 核心方法
@@ -257,6 +188,55 @@ def load(cls, file_path: str) -> BaseModel:
     """从文件加载模型"""
 ```
 
+### 4.2 `ModelFactory`类
+**功能**：模型创建工厂，支持动态加载和管理多种模型。
+
+#### 初始化
+```python
+from src.models.model_factory import ModelFactory
+
+factory = ModelFactory(
+    config: ConfigManager = None  # 配置管理器
+)
+```
+
+#### 核心方法
+```python
+def create_model(self, model_type: str, **kwargs) -> BaseModel:
+    """
+    创建指定类型的模型实例
+    
+    参数:
+        model_type: 模型类型（如"xgboost"）
+        **kwargs: 模型参数
+        
+    返回:
+        模型实例
+    """
+
+def load_latest_model(self, model_type: str) -> Optional[BaseModel]:
+    """
+    加载指定类型的最新模型
+    
+    参数:
+        model_type: 模型类型
+        
+    返回:
+        模型实例或None
+    """
+
+def save_model(self, model: BaseModel, model_type: str) -> str:
+    """
+    保存模型并更新最新模型链接
+    
+    参数:
+        model: 模型实例
+        model_type: 模型类型
+        
+    返回:
+        模型保存路径
+    """
+```
 
 ### 4.3 `ModelSelector`类
 **功能**：基于协议类型与历史性能自动选择最优模型。
@@ -287,7 +267,6 @@ def update_performance(self, protocol: Union[str, int], model_type: str, metrics
     """
 ```
 
-
 ## 5. 异常检测模块（`src/detection/`）
 
 ### 5.1 `AnomalyDetector`类
@@ -317,7 +296,6 @@ def detect(self, features: Dict[str, float]) -> Tuple[bool, float]:
     """
 ```
 
-
 ### 5.2 `AlertManager`类
 **功能**：处理异常检测结果，触发日志记录与告警通知。
 
@@ -337,7 +315,6 @@ def trigger_alert(self, features: Dict[str, float], score: float, session_id: st
         session_id: 会话ID
     """
 ```
-
 
 ## 6. 训练模块（`src/training/`）
 
@@ -372,7 +349,6 @@ def trigger_manual_training(self, model_type: str, protocol: Optional[int] = Non
     """
 ```
 
-
 ### 6.2 `ModelTrainer`类
 **功能**：基础训练逻辑，支持交叉验证与模型评估。
 
@@ -396,6 +372,53 @@ def train_new_model(self, model_type: str, X: np.ndarray, y: np.ndarray) -> Tupl
     """
 ```
 
+### 6.3 `FeedbackOptimizer`类
+**功能**：根据模型评估结果优化特征工程和模型训练。
+
+#### 核心方法
+```python
+from src.training.feedback_optimizer import FeedbackOptimizer
+
+optimizer = FeedbackOptimizer()
+
+def optimize_based_on_evaluation(
+    self,
+    model_type: str,
+    evaluation_metrics: Dict[str, float],
+    protocol: Optional[int] = None,
+    feature_importance: Optional[Dict[str, float]] = None,
+    model_factory=None
+) -> Dict[str, Any]:
+    """
+    根据模型评估结果进行优化
+    
+    参数:
+        model_type: 模型类型
+        evaluation_metrics: 评估指标
+        protocol: 协议编号
+        feature_importance: 特征重要性
+        model_factory: 模型工厂
+        
+    返回:
+        优化建议和执行结果
+    """
+
+def get_feature_ranking(self) -> List[Tuple[str, float]]:
+    """
+    获取特征重要性排名
+    
+    返回:
+        按重要性排序的特征列表
+    """
+
+def suggest_feature_engineering(self) -> List[str]:
+    """
+    基于历史性能建议特征工程优化
+    
+    返回:
+        优化建议列表
+    """
+```
 
 ## 7. 配置管理（`src/config/`）
 
@@ -421,21 +444,9 @@ def set(self, key: str, value: Any) -> None:
     """更新配置参数"""
 ```
 
-
 ## 8. 工具函数（`src/utils/`）
 
-### 8.1 数据处理工具
-```python
-from src.utils.helpers import (
-    load_json,               # 加载JSON文件
-    save_json,               # 保存JSON文件
-    split_train_test,        # 分割训练集/测试集
-    balance_dataset,         # 平衡数据集（处理类别不平衡）
-    normalize_features       # 特征标准化
-)
-```
-
-### 8.2 评估工具
+### 8.1 指标计算
 ```python
 from src.utils.metrics import (
     calculate_precision,     # 计算精确率
@@ -446,7 +457,7 @@ from src.utils.metrics import (
 )
 ```
 
-### 8.3 可视化工具
+### 8.2 可视化工具
 ```python
 from src.utils.evaluation_visualizer import EvaluationVisualizer
 
@@ -460,7 +471,84 @@ def plot_confusion_matrix(self, cm: np.ndarray) -> str:
 ```
 
 
-## 9. 错误处理与日志
+## 9. 命令行接口（CLI）
+
+系统提供统一的命令行接口，所有操作均通过`anomaly-detector`命令执行。
+
+### 9.1 系统管理命令
+
+#### 初始化系统
+```bash
+anomaly-detector init
+```
+
+#### 启动系统
+```bash
+anomaly-detector start
+```
+
+#### 停止系统
+```bash
+anomaly-detector stop
+```
+
+#### 查看系统状态
+```bash
+anomaly-detector status
+```
+
+### 9.2 模型训练命令
+
+#### 单次训练
+```bash
+anomaly-detector train once
+```
+
+#### 持续训练
+```bash
+anomaly-detector train continuous
+```
+
+#### 评估模型
+```bash
+anomaly-detector train evaluate
+```
+
+#### 优化模型
+```bash
+anomaly-detector train optimize
+```
+
+#### AutoML训练
+```bash
+anomaly-detector train automl
+```
+
+### 9.3 模型管理命令
+
+#### 查看模型列表
+```bash
+anomaly-detector models list
+```
+
+#### 切换模型版本
+```bash
+anomaly-detector models use --type xgboost --version 20230615_1230
+```
+
+### 9.4 告警管理命令
+
+#### 查看告警列表
+```bash
+anomaly-detector alerts list
+```
+
+#### 处理告警反馈
+```bash
+anomaly-detector alerts feedback --alert-id ALERT_12345 --correct
+```
+
+## 10. 错误处理与日志
 
 所有API方法均会抛出以下异常（需捕获处理）：
 - `ValueError`：参数无效或数据格式错误

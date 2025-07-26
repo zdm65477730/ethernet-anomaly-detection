@@ -6,6 +6,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import SGDClassifier
 from xgboost import XGBClassifier
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
+from typing import Union, Optional, Dict
+import time
 from .base_model import BaseModel
 
 class XGBoostModel(BaseModel):
@@ -47,7 +49,7 @@ class XGBoostModel(BaseModel):
         super().predict_proba(X)
         return self.model.predict_proba(X)
 
-    def get_feature_importance(self) -> Dict[str, float]:
+    def get_feature_importance(self) -> Optional[Dict[str, float]]:
         """获取特征重要性"""
         if not self.is_trained:
             return {}
@@ -120,7 +122,7 @@ class RandomForestModel(BaseModel):
         super().predict_proba(X)
         return self.model.predict_proba(X)
 
-    def get_feature_importance(self) -> Dict[str, float]:
+    def get_feature_importance(self) -> Optional[Dict[str, float]]:
         if not self.is_trained:
             return {}
         importances = self.model.feature_importances_

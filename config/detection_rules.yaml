@@ -1,41 +1,10 @@
-# 规则检测配置（无模型时生效，与anomaly_detector.py中的规则逻辑对应）
-# 规则判定：满足任一条件则视为异常
-
-# 通用规则（所有协议适用）
-general:
-  packet_size:
-    max_normal: 1000                # 正常包大小上限（字节，超过则异常）
-    min_normal: 40                  # 正常包大小下限（字节，过小则异常，如碎片攻击）
-  flow_rate:
-    threshold: 100                  # 每秒最大正常包数（超过则视为洪水攻击）
-    window: 10                      # 统计窗口（秒）
-  abnormal_protocols:               # 视为异常的协议号（如2=IGMP，97=EtherIP）
-    - 2
-    - 97
-
-# 协议专属规则（与protocol_specs.py对应）
-protocols:
-  tcp:                              # TCP协议规则（protocol=6）
-    flags:
-      abnormal_combinations:        # 异常标志位组合（如SYN+FIN同时置位）
-        - "SYN,FIN"
-        - "SYN,RST"
-      reserved_flags: true          # 保留标志位非0则视为异常
-    window_size:
-      min_normal: 64                # 最小正常窗口大小（过小可能是扫描）
-    retransmit_ratio:
-      threshold: 0.3                # 重传比例上限（超过30%则异常，可能是丢包攻击）
-
-  udp:                              # UDP协议规则（protocol=17）
-    port_range:
-      well_known_max: 1024          # 知名端口上限（超过则正常，否则需检查）
-      abnormal_ports: [53, 161]     # 需特殊监控的端口（DNS=53，SNMP=161）
-    payload_entropy:
-      threshold: 7.0                # 最大正常熵值（熵过高可能是加密攻击流量）
-
-  icmp:                             # ICMP协议规则（protocol=1）
-    allowed_types: [8, 0]           # 允许的类型（8=请求，0=应答，其他则异常）
-    request_rate:
-      threshold: 10                 # 每秒最大请求数（超过则视为ICMP洪水）
-    payload_size:
-      max_normal: 512               # 正常 payload 大小上限（过大可能是放大攻击）
+size_based:
+  enabled: true
+  max_normal_size: 1500
+protocol_based:
+  enabled: true
+  suspicious_protocols:
+  - 1
+rate_based:
+  enabled: true
+  max_packets_per_second: 100

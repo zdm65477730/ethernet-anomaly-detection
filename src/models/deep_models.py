@@ -7,6 +7,7 @@ from tensorflow.keras.layers import (
     Dense, LSTM, Dropout, BatchNormalization, InputLayer
 )
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from typing import Union, Optional, Dict
 from .base_model import BaseModel
 
 class LSTMModel(BaseModel):

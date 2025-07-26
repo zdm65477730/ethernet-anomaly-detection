@@ -1,4 +1,5 @@
 import time
+import threading
 import numpy as np
 from collections import deque
 from src.features.base_extractor import BaseFeatureExtractor
@@ -14,8 +15,14 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
     基于滑动窗口计算各类时间相关特征
     """
     
-    def __init__(self):
+    def __init__(self, config=None):
         super().__init__()
+        
+        # 获取配置管理器实例
+        if config is None:
+            from src.config.config_manager import ConfigManager
+            config = ConfigManager()
+        self.config = config
         
         # 滑动窗口配置
         self.window_configs = {
@@ -35,9 +42,13 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         # 如果没有显式配置，启用所有特征
         if not self.enabled_features and not self.disabled_features:
             self.enabled_features = list(self.feature_metadata.keys())
+            
+        # 初始化会话时序数据
+        self.session_temporal_data = {}
         
-        # 维护每个会话的时序数据
-        self.session_temporal_data = {}  # {session_id: {window_type: deque of packets}}
+        # 初始化线程相关变量
+        self._processing_thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
     
     def _init_feature_metadata(self):
         """初始化特征元数据"""
@@ -489,14 +500,13 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         super().start()
         
         # 启动定期清理线程
+        self._stop_event = threading.Event()
+        
         def cleanup_loop():
-            while self._is_running:
+            while not self._stop_event.is_set():
                 self.cleanup_old_sessions()
-                # 每30分钟清理一次
-                for _ in range(30):
-                    if not self._is_running:
-                        break
-                    time.sleep(60)
+                # 每30分钟清理一次，但可以被中断
+                self._stop_event.wait(timeout=1800)  # 30分钟 = 1800秒
         
         self._processing_thread = threading.Thread(target=cleanup_loop, daemon=True)
         self._processing_thread.start()
@@ -508,8 +518,10 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         if not self._is_running:
             return
             
-        super().stop()
-        
+        # 设置停止事件
+        if hasattr(self, '_stop_event'):
+            self._stop_event.set()
+            
         # 停止清理线程
         if self._processing_thread and self._processing_thread.is_alive():
             self._processing_thread.join(timeout=5)
@@ -519,4 +531,5 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         # 清空时序数据
         self.session_temporal_data.clear()
         
+        super().stop()
         self.logger.info("时序特征提取器已停止")

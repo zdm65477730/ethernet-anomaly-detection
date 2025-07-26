@@ -12,6 +12,7 @@ from typing import Tuple, Dict, List, Union, Optional
 import socket
 import fcntl
 import struct
+from collections import Counter
 
 def standardize_data(
     X_train: Union[np.ndarray, pd.DataFrame],
@@ -90,6 +91,31 @@ def normalize_data(
         X_test_normalized = scaler.transform(X_test) if X_test is not None else None
     
     return X_train_normalized, X_test_normalized, scaler
+
+def calculate_entropy(data: bytes) -> float:
+    """
+    计算字节数据的熵值（衡量随机性）
+    
+    参数:
+        data: 字节数据
+        
+    返回:
+        熵值 (0-8之间，8表示完全随机)
+    """
+    if not data:
+        return 0.0
+    
+    # 统计每个字节的出现频率
+    byte_counts = Counter(data)
+    data_length = len(data)
+    
+    # 计算熵值
+    entropy = 0.0
+    for count in byte_counts.values():
+        probability = count / data_length
+        entropy -= probability * np.log2(probability)
+    
+    return entropy
 
 def balance_dataset(
     X: Union[np.ndarray, pd.DataFrame],

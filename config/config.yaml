@@ -1,87 +1,41 @@
-# 异常检测系统主配置
-# 配置层级：模块.子项（与代码中ConfigManager.get("模块.子项")对应）
-
-# 网络捕获配置
-network:
-  interface: "eth0"                 # 监听的网络接口（可通过CLI --interface覆盖）
-  filter: ""                        # BPF过滤规则（如"tcp port 80"，空则捕获所有流量）
-  buffer_size: 65535                # 抓包缓冲区大小（字节）
-  capture_timeout: 100              # 抓包超时（毫秒）
-  session_timeout: 300              # 会话超时时间（秒，无活动则清理）
-  max_packets_per_session: 1000     # 单会话最大保留包数（防止内存溢出）
-
-# 数据处理配置
-data:
-  raw_dir: "data/raw"               # 原始数据包存储目录
-  processed_dir: "data/processed"   # 处理后特征数据目录
-  test_dir: "data/test"             # 测试数据集目录
-  storage_type: "parquet"           # 存储格式（parquet/csv，parquet更高效）
-  partition_by: "month"             # 分区方式（month/day，按时间分区）
-  retention_days: 90                # 数据保留天数（自动清理过期数据）
-  batch_size: 1000                  # 批量处理大小
-
-# 特征提取配置
+system:
+  log_level: INFO
+  pid_file: anomaly_detector.pid
+  max_restarts: 3
+capture:
+  interface: eth0
+  bpf_filter: ''
+  buffer_size: 1048576
+  snaplen: 65535
+  promiscuous: false
+session:
+  timeout: 300
+  max_packets_per_session: 1000
+  cleanup_interval: 60
 features:
-  window_sizes: [10, 60, 300]       # 时序特征滑动窗口（秒，短/中/长期）
-  stat:
-    enabled: true                   # 是否启用统计特征
-    max_categorical_values: 10      # 类别特征最大取值数（超过则视为异常）
-  temporal:
-    enabled: true                   # 是否启用时序特征
-   突发检测阈值: 3.0               # 流量突发判定（超过均值3倍视为突发）
-
-# 模型管理配置
-model:
-  type: "xgboost"                   # 默认模型类型（与model_factory支持的类型对应）
-  current: "latest"                 # 当前生效模型（软链接指向的版本）
-  threshold: 0.8                    # 异常判定阈值（概率≥此值视为异常）
-  models_dir: "models"              # 模型存储根目录
-  protocol_model_map:               # 协议-模型映射（优先级高于默认模型）
-    "tcp": "lstm"                   # TCP协议优先使用LSTM（时序特征更重要）
-    "udp": "xgboost"                # UDP协议优先使用XGBoost（统计特征更重要）
-    "icmp": "random_forest"         # ICMP协议优先使用随机森林
-
-# 异常检测配置
+  enabled_stat_features:
+  - packet_size
+  - protocol
+  - payload_size
+  - tcp_flags
+  - udp_length
+  - icmp_type
+  temporal_window_size: 60
+  temporal_window_step: 10
 detection:
-  mode: "hybrid"                    # 检测模式：model（仅模型）/rule（仅规则）/hybrid（混合）
-  alert_threshold: 0.8              # 触发告警的异常分数阈值（与model.threshold联动）
-  alert_cooldown: 300               # 告警冷却时间（秒，防止重复告警）
-  max_alerts_per_minute: 10         # 每分钟最大告警数（防告警风暴）
-
-# 训练配置
+  threshold: 0.8
+  alert_email: ''
+  smtp_server: smtp.example.com
+  smtp_port: 587
+  smtp_username: ''
+  smtp_password: ''
 training:
-  test_size: 0.2                    # 训练集/测试集拆分比例
-  cross_validation_folds: 5         # 交叉验证折数
-  min_samples: 1000                 # 触发训练的最小样本数
-  class_weight: "balanced"          # 类别权重（解决不平衡问题）
-  continuous:
-    check_interval: 3600            # 持续训练检查间隔（秒，默认1小时）
-    min_samples: 1000               # 持续训练触发的最小新样本数
-    max_history_days: 30            # 训练时保留的最大历史数据天数
-    retrain_full_interval: 604800   # 全量重训间隔（秒，默认7天）
-
-# 数据存储配置
-storage:
-  parquet:
-    compression: "snappy"           # Parquet压缩算法（平衡速度与空间）
-  sqlite:
-    enabled: false                  # 是否启用SQLite存储（默认关闭，用Parquet文件）
-    db_path: "data/traffic.db"      # SQLite数据库路径（启用时生效）
-
-# 日志配置
-logging:
-  level: "INFO"                     # 日志级别（DEBUG/INFO/WARNING/ERROR）
-  file_max_size: 10485760           # 单个日志文件大小（字节，默认10MB）
-  backup_count: 5                   # 日志备份文件数
-
-# 告警配置（与alert_manager.py联动）
-alert:
-  enabled: true                     # 是否启用告警
-  smtp_server: "smtp.example.com"   # 邮件服务器（如smtp.gmail.com:587）
-  smtp_username: "alerts@example.com"# 发件人邮箱
-  smtp_password: "your-app-password"# 邮箱密码/授权码
-  smtp_use_tls: true                # 是否启用TLS加密
-  recipients:                       # 告警接收人列表
-    - "admin@example.com"
-    - "security@example.com"
-  subject_prefix: "[异常检测告警]"    # 告警邮件主题前缀
+  check_interval: 3600
+  min_samples: 1000
+  test_size: 0.2
+  cross_validation_folds: 5
+  retrain_threshold: 0.05
+model:
+  type: xgboost
+  save_interval: 3600
+  max_versions: 10

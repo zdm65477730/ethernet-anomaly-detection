@@ -53,7 +53,7 @@ class AnomalyDetector(BaseComponent):
         self.protocol_counters = {}
         
     def set_features_queue(self, queue):
-        """设置特征队列（从traffic_analyzer接收特征）"""
+        """设置特征队列（从traffic_analyzer接收）"""
         self.features_queue = queue
         
     def get_results_queue(self):
@@ -188,8 +188,6 @@ class AnomalyDetector(BaseComponent):
             
             # 确定异常类型（如果模型支持）
             anomaly_type = "unknown_anomaly"
-            if hasattr(model, "predict_anomaly_type"):
-                anomaly_type = model.predict_anomaly_type(input_data)[0]
             
             return {
                 "anomaly_score": anomaly_score,
@@ -215,7 +213,8 @@ class AnomalyDetector(BaseComponent):
             protocol_num = None
             
             # 从协议名称映射到协议号
-            for num, spec in get_protocol_spec.__globals__["PROTOCOL_SPECS"].items():
+            protocol_specs = get_protocol_spec.__globals__.get("PROTOCOL_SPECS", {})
+            for num, spec in protocol_specs.items():
                 if spec["name"] == protocol_name:
                     protocol_num = num
                     break
@@ -236,7 +235,7 @@ class AnomalyDetector(BaseComponent):
             
             # 整合结果
             result = {
-                **features,** detection_result,
+                **features, **detection_result,
                 "detection_time": time.time()
             }
             
@@ -269,7 +268,7 @@ class AnomalyDetector(BaseComponent):
                     if not self.results_queue.full():
                         self.results_queue.put(result)
                         
-                        # 如果是异常，记录到告警管理器
+                        # 如果是异常，记录到告警管理器（延迟导入避免循环依赖）
                         if result["is_anomaly"]:
                             from .alert_manager import AlertManager
                             alert_manager = AlertManager(self.config)
@@ -340,4 +339,3 @@ class AnomalyDetector(BaseComponent):
             "protocol_thresholds": self.protocol_thresholds
         })
         return status
-    

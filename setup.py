@@ -22,7 +22,7 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "anomaly-detection = src.cli:main",
+            "anomaly-detector = src.cli:main",
             "ads = src.cli:main",  # 简写命令
         ],
     },
@@ -40,14 +40,6 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=read_file('requirements.txt').splitlines(),
-    extras_require={
-        "dev": read_file('requirements_dev.txt').splitlines(),
-        "gpu": [
-            "tensorflow-gpu>=2.8.0",
-            "torch>=1.10.2+cu113",
-            "cuPy>=9.5.0",
-        ]
-    },
     project_urls={
         "Documentation": "https://example.com/docs/anomaly-detection",
         "Source": "https://github.com/example/anomaly-detection-system",

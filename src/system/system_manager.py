@@ -18,10 +18,18 @@ from src.models.model_selector import ModelSelector
 class SystemManager(BaseComponent):
     """系统管理器，负责初始化、启动、停止所有组件，并监控组件状态"""
     
+    _instance = None  # 类属性，用于存储单例实例
+    _stopping = False  # 类级别属性，表示系统是否正在停止
+    
     def __init__(self, config=None):
         super().__init__()
-        self.logger = get_logger("system.manager")
+        SystemManager._instance = self  # 保存实例引用
+        
+        # 使用单例模式获取ConfigManager实例
         self.config = config or ConfigManager()
+        
+        # 初始化日志记录器
+        self.logger = get_logger("system.manager")
         
         # 组件字典
         self._components: Dict[str, BaseComponent] = {}
@@ -30,80 +38,107 @@ class SystemManager(BaseComponent):
         self._component_dependencies: Dict[str, List[str]] = {
             "session_tracker": ["packet_capture"],
             "traffic_analyzer": ["session_tracker"],
-            "anomaly_detector": ["traffic_analyzer", "model_factory", "model_selector"],
+            "anomaly_detector": ["traffic_analyzer"],
             "alert_manager": ["anomaly_detector"],
-            "feedback_processor": ["anomaly_detector"]
+            "feedback_processor": ["alert_manager"],
+            "monitor": []
         }
         
-        # 监控线程
-        self._monitoring_thread = None
-        self._monitor_interval = 5  # 组件监控间隔(秒)
+        # 组件重启次数限制
+        self._max_restarts: Dict[str, int] = {
+            "packet_capture": 3,
+            "session_tracker": 3,
+            "traffic_analyzer": 3,
+            "anomaly_detector": 3,
+            "alert_manager": 3,
+            "feedback_processor": 3,
+            "monitor": 3
+        }
+        
+        # 系统停止标志
+        self._stopping = False
+        
+        # 组件重启历史
+        self._restart_history: Dict[str, List[float]] = {}  # 组件重启历史
         
         # 故障重启配置
-        self._max_restarts = 5  # 最大重启次数
+        self._max_restarts_count = 5  # 最大重启次数
         self._restart_window = 60  # 重启时间窗口(秒)
-        self._restart_history: Dict[str, List[float]] = {}  # 组件重启历史
+        
+        # 组件监控间隔（秒）
+        self._monitor_interval = 1
+        
+        # 监控线程
+        self._monitoring_thread: Optional[threading.Thread] = None
         
         # 初始化所有组件
         self._initialize_components()
-
+    
     def _initialize_components(self) -> None:
         """初始化所有系统组件"""
         try:
-            # 基础组件
-            self._components["config_manager"] = self.config
-            self._components["system_monitor"] = SystemMonitor(config=self.config)
-            self._components["model_factory"] = ModelFactory(config=self.config)
-            self._components["model_selector"] = ModelSelector(config=self.config)
+            # 监控组件（独立运行）
+            self._components["monitor"] = SystemMonitor()
             
-            # 流量捕获与会话跟踪组件
-            self._components["packet_capture"] = PacketCapture(
-                interface=self.config.get("network.interface"),
-                filter=self.config.get("network.filter"),
-                config=self.config
-            )
-            self._components["session_tracker"] = SessionTracker(config=self.config)
+            # 数据采集组件
+            self._components["packet_capture"] = PacketCapture()
+            
+            # 会话跟踪组件
+            self._components["session_tracker"] = SessionTracker()
             
             # 流量分析组件
-            self._components["traffic_analyzer"] = TrafficAnalyzer(config=self.config)
+            self._components["traffic_analyzer"] = TrafficAnalyzer()
             
             # 检测与告警组件
             self._components["anomaly_detector"] = AnomalyDetector(
-                model_factory=self._components["model_factory"],
-                model_selector=self._components["model_selector"],
-                config=self.config
-            )
-            self._components["alert_manager"] = AlertManager(config=self.config)
-            self._components["feedback_processor"] = FeedbackProcessor(
-                feature_extractor=self._components["traffic_analyzer"].stat_extractor,
                 config=self.config
             )
             
-            self.logger.info(f"已初始化 {len(self._components)} 个组件")
+            # 模型相关组件
+            self._components["model_factory"] = ModelFactory(
+                config=self.config
+            )
+            self._components["model_selector"] = ModelSelector(
+                config=self.config
+            )
+            
+            self._components["alert_manager"] = AlertManager(
+                config=self.config
+            )
+            
+            # 反馈处理组件
+            self._components["feedback_processor"] = FeedbackProcessor(
+                config=self.config
+            )
+            
+            self.logger.info("所有组件初始化完成")
             
         except Exception as e:
-            self.logger.error(f"组件初始化失败: {str(e)}", exc_info=True)
+            self.logger.error(f"组件初始化失败: {str(e)}")
+            self.logger.debug(traceback.format_exc())
             raise
-
+    
     def _get_component_start_order(self) -> List[str]:
-        """
-        确定组件启动顺序，确保依赖组件先启动
-        
-        返回:
-            组件名称列表，按启动顺序排列
-        """
+        """获取组件启动顺序（考虑依赖关系的拓扑排序）"""
+        # 构建依赖图并进行拓扑排序
         visited = set()
         order = []
         
-        def dfs(component):
-            if component not in visited:
-                visited.add(component)
-                # 先启动依赖组件
-                for dep in self._component_dependencies.get(component, []):
+        def dfs(component_name):
+            if component_name in visited:
+                return
+            visited.add(component_name)
+            
+            # 先启动依赖组件
+            deps = self._component_dependencies.get(component_name, [])
+            for dep in deps:
+                if dep in self._components:
                     dfs(dep)
-                order.append(component)
+            
+            # 再启动当前组件
+            order.append(component_name)
         
-        # 对所有组件执行深度优先搜索，确定启动顺序
+        # 对所有组件执行DFS
         for component in self._components:
             dfs(component)
             
@@ -116,20 +151,30 @@ class SystemManager(BaseComponent):
             return False
             
         component = self._components[component_name]
+        # 检查组件是否是BaseComponent的实例，如果不是则跳过
+        if not isinstance(component, BaseComponent):
+            self.logger.warning(f"组件 {component_name} 不是BaseComponent的实例")
+            return True
+            
         if component.is_running:
             self.logger.debug(f"组件 {component_name} 已在运行中")
             return True
             
         try:
             # 特殊组件可能需要额外参数
-            if component_name == "traffic_analyzer":
+            if component_name == "packet_capture":
+                # 设置网络接口和过滤规则
+                interface = self.config.get("network.interface")
+                filter_rule = self.config.get("network.filter")
+                if interface:
+                    component.set_interface(interface)
+                if filter_rule:
+                    component.set_filter(filter_rule)
+                component.start()
+            elif component_name == "traffic_analyzer":
                 component.start(session_tracker=self._components["session_tracker"])
             elif component_name == "anomaly_detector":
-                component.start(
-                    feature_queue=self._components["traffic_analyzer"]._feature_queue,
-                    alert_manager=self._components["alert_manager"],
-                    feedback_processor=self._components["feedback_processor"]
-                )
+                component.start()
             else:
                 component.start()
                 
@@ -148,34 +193,54 @@ class SystemManager(BaseComponent):
             return False
             
         component = self._components[component_name]
-        if not component.is_running:
-            self.logger.debug(f"组件 {component_name} 已停止")
+        self.logger.debug(f"正在停止组件 {component_name} (类型: {type(component).__name__})")
+        
+        # 检查组件是否是BaseComponent的实例，如果不是则跳过
+        if not isinstance(component, BaseComponent):
+            self.logger.debug(f"组件 {component_name} 不是BaseComponent的实例，跳过停止")
             return True
             
         try:
+            # 检查组件是否正在运行
+            if not component.is_running:
+                self.logger.debug(f"组件 {component_name} 未运行，无需停止")
+                return True
+                
+            self.logger.debug(f"调用组件 {component_name} 的stop方法")
             component.stop()
             self.logger.info(f"组件 {component_name} 已停止")
             return True
-            
         except Exception as e:
             self.logger.error(f"停止组件 {component_name} 失败: {str(e)}", exc_info=True)
-            component.record_error(e)
+            try:
+                component.record_error(e)
+            except Exception as inner_e:
+                self.logger.error(f"记录组件 {component_name} 错误信息失败: {str(inner_e)}", exc_info=True)
             return False
-
+    
     def _monitor_components(self) -> None:
-        """监控组件状态，自动重启故障组件"""
+        """监控组件运行状态"""
         while self.is_running:
             try:
                 # 检查所有组件状态
                 for name, component in self._components.items():
-                    status = component.get_status()
-                    
-                    # 检查组件是否运行正常
-                    if not status["is_running"] and name not in ["config_manager"]:
-                        self.logger.warning(f"组件 {name} 未运行，状态: {status}")
+                    # 跳过不需要监控的组件
+                    if name in ["config_manager"]:
+                        continue
                         
-                        # 尝试重启组件
-                        self._attempt_restart(name)
+                    # 检查组件是否运行正常
+                    if component.is_running:
+                        continue
+                        
+                    # 如果系统正在停止过程中，不尝试重启组件
+                    if self._stopping:
+                        continue
+                        
+                    status = component.get_status()
+                    self.logger.warning(f"组件 {name} 未运行，状态: {status}")
+                    
+                    # 尝试重启组件
+                    self._attempt_restart(name)
                 
                 time.sleep(self._monitor_interval)
                 
@@ -190,53 +255,66 @@ class SystemManager(BaseComponent):
         if component_name not in self._restart_history:
             self._restart_history[component_name] = []
         
+        # 确保_restart_history[component_name]是列表而不是字典
+        if not isinstance(self._restart_history[component_name], list):
+            self._restart_history[component_name] = []
+        
         self._restart_history[component_name] = [
             t for t in self._restart_history[component_name]
             if now - t < self._restart_window
         ]
         
         # 检查重启次数是否超过限制
-        if len(self._restart_history[component_name]) >= self._max_restarts:
+        max_restarts = self._max_restarts.get(component_name, 3)  # 默认3次
+        if len(self._restart_history[component_name]) >= max_restarts:
             self.logger.error(
                 f"组件 {component_name} 在 {self._restart_window} 秒内已重启 "
-                f"{self._max_restarts} 次，达到上限，停止尝试"
+                f"{max_restarts} 次，达到上限，停止尝试"
             )
             return False
         
         # 按依赖顺序重启组件
         start_order = self._get_component_start_order()
-        component_index = start_order.index(component_name) if component_name in start_order else -1
-        
-        if component_index == -1:
-            # 直接重启单个组件
-            success = self._start_component(component_name)
-        else:
-            # 按顺序重启从依赖组件到目标组件
-            success = True
-            for name in start_order[:component_index + 1]:
-                if not self._start_component(name):
-                    success = False
-                    break
-        
-        if success:
+        if component_name in start_order:
             # 记录重启时间
             self._restart_history[component_name].append(now)
-            self.logger.info(f"组件 {component_name} 重启成功")
-        else:
-            self.logger.error(f"组件 {component_name} 重启失败")
             
-        return success
-
-    def start(self) -> bool:
-        """启动所有组件"""
+            # 重启组件
+            if self._start_component(component_name):
+                self.logger.info(f"组件 {component_name} 重启成功")
+                return True
+            else:
+                self.logger.error(f"组件 {component_name} 重启失败")
+                return False
+        else:
+            self.logger.warning(f"未知组件 {component_name}，无法重启")
+            return False
+    
+    def start(self, interface: Optional[str] = None, bpf_filter: Optional[str] = None) -> bool:
+        """
+        启动系统管理器和所有组件
+        
+        Args:
+            interface: 网络接口
+            bpf_filter: BPF过滤规则
+            
+        Returns:
+            是否启动成功
+        """
         if self.is_running:
             self.logger.warning("系统已在运行中")
-            return True
+            return False
             
         try:
+            # 设置网络接口和过滤规则（如果提供）
+            if interface:
+                self.config.set("network.interface", interface)
+            if bpf_filter:
+                self.config.set("network.bpf_filter", bpf_filter)
+                
             # 确定组件启动顺序
             start_order = self._get_component_start_order()
-            self.logger.info(f"组件启动顺序: {start_order}")
+            self.logger.debug(f"组件启动顺序: {start_order}")
             
             # 按顺序启动所有组件
             all_success = True
@@ -273,21 +351,45 @@ class SystemManager(BaseComponent):
             self.logger.warning("系统已停止")
             return
             
-        # 先停止监控线程
-        super().stop()
+        # 设置停止标志
+        self._stopping = True
+            
+        try:
+            # 按与启动相反的顺序停止组件
+            start_order = self._get_component_start_order()
+            stop_order = list(reversed(start_order))
+            self.logger.debug(f"组件停止顺序: {stop_order}")
+            
+            for component_name in stop_order:
+                try:
+                    self.logger.debug(f"正在停止组件: {component_name}")
+                    self._stop_component(component_name)
+                    self.logger.debug(f"组件 {component_name} 停止完成")
+                except Exception as e:
+                    self.logger.error(f"停止组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
+            
+            # 等待监控线程结束
+            if self._monitoring_thread and self._monitoring_thread.is_alive():
+                self.logger.debug("正在等待监控线程结束")
+                self._monitoring_thread.join(timeout=5)
+                if self._monitoring_thread.is_alive():
+                    self.logger.warning("监控线程未能正常终止")
+            
+            # 最后停止系统管理器自身
+            super().stop()
+            self.logger.debug("系统管理器自身已停止")
+            
+            self.logger.info("系统已完全停止")
+            
+        except Exception as e:
+            self.logger.error(f"系统停止过程中出现异常: {str(e)}", exc_info=True)
         
-        # 按与启动相反的顺序停止组件
-        start_order = self._get_component_start_order()
-        stop_order = reversed(start_order)
-        
-        for component_name in stop_order:
-            self._stop_component(component_name)
-        
-        # 等待监控线程结束
-        if self._monitoring_thread and self._monitoring_thread.is_alive():
-            self._monitoring_thread.join(timeout=5)
-        
-        self.logger.info("系统已完全停止")
+        finally:
+            self._stopping = False  # 确保在最后将_stopping标志重置为False
+            # 可以在这里添加其他清理操作，如释放资源、关闭连接等
+            # 例如：self.cleanup_resources()
+            
+        # 可以继续执行其他finally块的内容
 
     def get_component(self, component_name: str) -> Optional[BaseComponent]:
         """获取指定组件实例"""
@@ -297,7 +399,7 @@ class SystemManager(BaseComponent):
         """获取所有组件"""
         return self._components.copy()
 
-    def get_system_status(self) -> Dict[str, Any]:
+    def get_system_status(self) -> Dict[str, any]:
         """获取整个系统的状态信息"""
         system_status = super().get_status()
         

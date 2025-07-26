@@ -15,8 +15,14 @@ class StatFeatureExtractor(BaseFeatureExtractor):
     包括基本统计特征和协议专属特征
     """
     
-    def __init__(self):
+    def __init__(self, config=None):
         super().__init__()
+        
+        # 获取配置管理器实例
+        if config is None:
+            from src.config.config_manager import ConfigManager
+            config = ConfigManager()
+        self.config = config
         
         # 初始化特征元数据
         self._init_feature_metadata()
@@ -221,26 +227,26 @@ class StatFeatureExtractor(BaseFeatureExtractor):
             features["has_payload"] = 1 if len(payload) > 0 else 0
         
         # TCP特征
-        if protocol_num == 6 and hasattr(transport_layer, "flags"):  # TCP
+        if protocol_num == 6 and isinstance(transport_layer, dict):  # TCP
             if "tcp_flags" in relevant_features:
-                features["tcp_flags"] = transport_layer.flags
+                features["tcp_flags"] = transport_layer.get("flags", 0)
             if "tcp_flag_syn" in relevant_features:
-                features["tcp_flag_syn"] = 1 if (transport_layer.flags & 0x02) else 0
+                features["tcp_flag_syn"] = 1 if (transport_layer.get("flags", 0) & 0x02) else 0
             if "tcp_flag_ack" in relevant_features:
-                features["tcp_flag_ack"] = 1 if (transport_layer.flags & 0x10) else 0
+                features["tcp_flag_ack"] = 1 if (transport_layer.get("flags", 0) & 0x10) else 0
             if "tcp_flag_fin" in relevant_features:
-                features["tcp_flag_fin"] = 1 if (transport_layer.flags & 0x01) else 0
+                features["tcp_flag_fin"] = 1 if (transport_layer.get("flags", 0) & 0x01) else 0
             if "tcp_flag_rst" in relevant_features:
-                features["tcp_flag_rst"] = 1 if (transport_layer.flags & 0x04) else 0
-            if "window_size" in relevant_features and hasattr(transport_layer, "winsize"):
-                features["window_size"] = transport_layer.winsize
+                features["tcp_flag_rst"] = 1 if (transport_layer.get("flags", 0) & 0x04) else 0
+            if "window_size" in relevant_features and "winsize" in transport_layer:
+                features["window_size"] = transport_layer.get("winsize", 0)
         
         # ICMP特征
-        if protocol_num in (1, 58) and hasattr(transport_layer, "type"):  # ICMP或ICMPv6
+        if protocol_num in (1, 58) and isinstance(transport_layer, dict):  # ICMP或ICMPv6
             if "icmp_type" in relevant_features:
-                features["icmp_type"] = transport_layer.type
-            if "icmp_code" in relevant_features and hasattr(transport_layer, "code"):
-                features["icmp_code"] = transport_layer.code
+                features["icmp_type"] = transport_layer.get("type", -1)
+            if "icmp_code" in relevant_features and "code" in transport_layer:
+                features["icmp_code"] = transport_layer.get("code", -1)
         
         return features
     
@@ -260,7 +266,19 @@ class StatFeatureExtractor(BaseFeatureExtractor):
             return features
             
         # 获取协议信息
-        protocol_num = session.protocol
+        protocol_num = None
+        # 尝试从session获取协议号
+        if hasattr(session, 'protocol'):
+            protocol_num = session.protocol
+        else:
+            # 从第一个包中获取协议信息
+            first_packet = session.packets[0] if session.packets else None
+            if first_packet and "ip" in first_packet:
+                protocol_num = first_packet["ip"].get("protocol")
+        
+        if protocol_num is None:
+            return features
+            
         spec = get_protocol_spec(protocol_num)
         protocol_name = spec["name"]
         

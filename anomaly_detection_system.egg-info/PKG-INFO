@@ -1,3 +1,61 @@
+Metadata-Version: 2.4
+Name: anomaly-detection-system
+Version: 1.0.0
+Summary: 实时网络异常检测系统，基于机器学习的网络安全防护工具
+Home-page: https://github.com/example/anomaly-detection-system
+Author: Security Research Team
+Author-email: security@example.com
+Project-URL: Documentation, https://example.com/docs/anomaly-detection
+Project-URL: Source, https://github.com/example/anomaly-detection-system
+Project-URL: Tracker, https://github.com/example/anomaly-detection-system/issues
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: System Administrators
+Classifier: Intended Audience :: Security Professionals
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Topic :: Security
+Classifier: Topic :: System :: Networking :: Monitoring
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: python-dateutil>=2.8.2
+Requires-Dist: numpy>=1.21.5
+Requires-Dist: pandas>=1.3.5
+Requires-Dist: scikit-learn>=1.0.2
+Requires-Dist: xgboost>=1.5.2
+Requires-Dist: scipy>=1.7.3
+Requires-Dist: joblib>=1.1.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: python-dotenv>=0.20.0
+Requires-Dist: netifaces>=0.11.0
+Requires-Dist: matplotlib>=3.10
+Requires-Dist: seaborn>=0.13
+Requires-Dist: scapy>=2.5.0
+Requires-Dist: dpkt>=1.9.7.2
+Requires-Dist: pcapy-ng>=1.0.9
+Requires-Dist: h5py>=3.6.0
+Requires-Dist: sqlalchemy>=1.4.31
+Requires-Dist: redis>=4.1.4
+Requires-Dist: python-json-logger>=2.0.2
+Requires-Dist: prometheus-client>=0.12.0
+Requires-Dist: slack-sdk>=3.15.0
+Requires-Dist: tensorflow>=2.8.0
+Requires-Dist: typer>=0.4.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: project-url
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
 # 异常检测系统
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -34,7 +92,6 @@
 - 依赖库：详见requirements.txt
 
 ### 快速安装
-```
 # 克隆仓库
 git clone https://github.com/zdm65477730/ethernet-anomaly-detection.git
 cd ethernet-anomaly-detection
@@ -45,10 +102,7 @@ sudo ./scripts/install_dependencies.sh
 
 # 以开发模式安装
 pip install -e .
-```
-
 ### 手动安装
-```
 # 创建虚拟环境
 python -m venv venv
 source venv/bin/activate
@@ -61,61 +115,35 @@ pip install -r requirements_dev.txt
 
 # 安装项目
 pip install -e .
-```
-
 ## 使用方法
 
 ### 基本操作
-```
 # 启动系统
-anomaly-detector start
+anomaly-detection start
 
 # 查看系统状态
-anomaly-detector status
+anomaly-detection status
 
 # 停止系统
-anomaly-detector stop
-```
-
+anomaly-detection stop
 ### 高级选项
-```
 # 指定网络接口
-anomaly-detector start -i eth1
+anomaly-detection start -i eth1
 
 # 使用特定模型
-anomaly-detector start --model lstm
+anomaly-detection start --model lstm
 
 # 查看帮助
-anomaly-detector --help
-```
-
+anomaly-detection --help
 ### 模型管理
-```
 # 查看可用模型
-anomaly-detector models list
+anomaly-detection models list
 
 # 训练新模型
-anomaly-detector train once
+anomaly-detection train once
 
 # 切换模型版本
-anomaly-detector models use --type xgboost --version 20230615_1230
-```
-
-### 模型训练命令
-```
-# 查看训练命令帮助
-anomaly-detector train --help
-
-# 执行单次训练
-anomaly-detector train once --model xgboost
-
-# 启动持续训练模式
-anomaly-detector train continuous
-
-# 评估现有模型
-anomaly-detector train evaluate
-```
-
+anomaly-detection models use --type xgboost --version 20230615_1230
 ## 配置说明
 
 系统配置文件位于`config/`目录，主要配置文件包括：
@@ -136,7 +164,6 @@ anomaly-detector train evaluate
 ## 开发指南
 
 ### 运行测试
-```
 # 运行所有测试
 pytest
 
@@ -145,8 +172,6 @@ pytest tests/unit/test_detection.py
 
 # 生成测试覆盖率报告
 pytest --cov=src tests/
-```
-
 ### 代码规范
 
 项目遵循PEP 8规范，使用以下工具确保代码质量：
