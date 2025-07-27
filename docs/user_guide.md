@@ -49,7 +49,8 @@ python -m venv venv
 source venv/bin/activate
 
 # 安装依赖
-pip install -r requirements.txt
+# https://mirrors.aliyun.com/pypi/simple/ or https://pypi.tuna.tsinghua.edu.cn/simple
+pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 ```
 
 ## 系统使用
