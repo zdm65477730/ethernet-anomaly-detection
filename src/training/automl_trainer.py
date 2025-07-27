@@ -31,7 +31,7 @@ class AutoMLTrainer:
         self.model_selector = model_selector or ModelSelector(config=self.config)
         
         # 初始化训练器组件
-        self.evaluator = ModelEvaluator(config=self.config)
+        self.evaluator = ModelEvaluator()
         self.feedback_optimizer = FeedbackOptimizer(config=self.config)
         self.base_trainer = ModelTrainer(
             model_factory=self.model_factory,
@@ -139,7 +139,9 @@ class AutoMLTrainer:
             # 如果没有指定协议，自动检测数据中的协议类型
             if protocol is None and protocol_labels is not None:
                 self.logger.info("自动检测训练数据中的协议类型")
-                unique_protocols = np.unique(protocol_labels)
+                # 过滤掉NaN值后再获取唯一值
+                filtered_protocols = [p for p in protocol_labels if not (isinstance(p, float) and np.isnan(p))]
+                unique_protocols = np.unique(filtered_protocols)
                 self.logger.info(f"检测到以下协议类型: {unique_protocols}")
                 
                 # 为每种协议分别训练模型
@@ -147,6 +149,10 @@ class AutoMLTrainer:
                     if not self._is_running:
                         break
                     
+                    # 跳过NaN协议
+                    if isinstance(proto, float) and np.isnan(proto):
+                        continue
+                        
                     proto_spec = get_protocol_spec(proto)
                     proto_name = proto_spec["name"]
                     self.logger.info(f"开始为 {proto_name} 协议训练模型")
@@ -157,6 +163,11 @@ class AutoMLTrainer:
                     y_proto = y[mask]
                     
                     self.logger.info(f"{proto_name} 协议数据量: {len(X_proto)} 样本")
+                    
+                    # 检查样本数量是否足够
+                    if len(X_proto) < 10:  # 至少需要10个样本
+                        self.logger.warning(f"{proto_name} 协议样本数不足(少于10个)，跳过训练")
+                        continue
                     
                     # 为该协议选择最佳模型类型
                     model_type = self.model_selector.select_best_model(
@@ -292,18 +303,36 @@ class AutoMLTrainer:
         protocol: Optional[int],
         feature_names: List[str]
     ) -> None:
-        """为特定协议训练模型"""
+        """训练特定协议的模型"""
         try:
-            # 简化版本，直接训练一次
+            # 检查数据是否为空
+            if len(X) == 0 or len(y) == 0:
+                self.logger.warning(f"协议 {protocol} 的训练数据为空，跳过训练")
+                return
+                
+            # 检查样本数量是否足够
+            if len(X) < 10:  # 至少需要10个样本
+                self.logger.warning(f"协议 {protocol} 的训练样本数不足(少于10个)，跳过训练")
+                return
+            
+            self.logger.info(f"开始训练 {model_type} 模型")
+            
+            # 训练模型
             model, metrics, _ = self.base_trainer.train_new_model(
                 model_type=model_type,
                 X=X,
-                y=y
+                y=y,
+                protocol_labels=[protocol] * len(X) if protocol is not None else None
             )
             
             # 保存模型
-            model_path = self.model_factory.save_model(model, model_type)
-            self.logger.info(f"保存 {model_type} 模型到: {model_path}")
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            f1_score = metrics.get('f1', 0)
+            model_filename = f"{model_type}_{timestamp}_f1_{f1_score:.4f}.pkl"
+            model_path = os.path.join(self.model_factory.models_dir, model_filename)
+            
+            save_result = self.model_factory.save_model(model, model_path)
+            self.logger.info(f"保存 {model_type} 模型到: {save_result}")
             
             # 更新模型选择器的性能记录
             if protocol is not None:
@@ -352,16 +381,24 @@ class AutoMLTrainer:
             full_df = pd.concat(dfs, ignore_index=True)
             self.logger.info(f"总共加载 {len(full_df)} 条数据记录")
             
+            # 数据预处理
+            from src.data.data_processor import DataProcessor
+            data_processor = DataProcessor()
+            full_df = data_processor.clean_data(full_df)
+            
             # 分离特征和标签
             if 'label' not in full_df.columns:
                 self.logger.error("数据中未找到'label'列作为标签")
                 return np.array([]), np.array([]), None, []
             
-            # 假设第一列是标签，其余是特征
-            y = full_df['label'].values
+            # 获取特征列（排除标签列）
             feature_columns = [col for col in full_df.columns if col != 'label']
-            X = full_df[feature_columns].values
+            X_df = full_df[feature_columns]
+            y = full_df['label'].values
             feature_names = feature_columns
+            
+            # 转换为numpy数组之前确保所有列都是数值类型
+            X = X_df.apply(pd.to_numeric, errors='coerce').values
             
             # 尝试获取协议标签
             protocol_labels = None

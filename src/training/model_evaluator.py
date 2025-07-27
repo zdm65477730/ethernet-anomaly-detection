@@ -88,7 +88,7 @@ class ModelEvaluator:
     ) -> Dict[str, float]:
         """获取特征重要性"""
         try:
-            # 尝试直接获取特征重要性
+            # 首先尝试直接获取特征重要性
             if hasattr(model, 'feature_importances_'):
                 importances = model.feature_importances_
                 return dict(zip(feature_names, importances))
@@ -96,9 +96,40 @@ class ModelEvaluator:
                 # 对于线性模型，使用系数的绝对值
                 importances = np.abs(model.coef_[0]) if model.coef_.ndim > 1 else np.abs(model.coef_)
                 return dict(zip(feature_names, importances))
+            elif hasattr(model, 'model') and hasattr(model.model, 'feature_importances_'):
+                # 对于封装模型（如XGBoostModel），尝试访问内部模型的特征重要性
+                importances = model.model.feature_importances_
+                return dict(zip(feature_names, importances))
             else:
-                # 估算特征重要性
-                return self._estimate_feature_importance(model, X, y, feature_names)
+                # 使用排列重要性方法估算
+                from sklearn.inspection import permutation_importance
+                
+                # 使用模型的predict方法计算基线性能
+                y_pred = model.predict(X)
+                from sklearn.metrics import accuracy_score
+                baseline_score = accuracy_score(y, y_pred)
+                
+                # 计算每个特征的重要性
+                importances = {}
+                for i, feature_name in enumerate(feature_names):
+                    # 创建扰动数据
+                    X_permuted = X.copy()
+                    # 扰动第i个特征
+                    np.random.shuffle(X_permuted[:, i])
+                    
+                    # 计算扰动后的性能
+                    y_pred_permuted = model.predict(X_permuted)
+                    permuted_score = accuracy_score(y, y_pred_permuted)
+                    
+                    # 计算重要性（性能下降越大，特征越重要）
+                    importances[feature_name] = baseline_score - permuted_score
+                
+                # 归一化重要性
+                total_importance = sum(abs(v) for v in importances.values())
+                if total_importance > 0:
+                    importances = {k: abs(v)/total_importance for k, v in importances.items()}
+                
+                return importances
         except Exception as e:
             logger.warning(f"无法获取特征重要性: {e}")
             # 返回均匀分布的重要性
@@ -113,32 +144,48 @@ class ModelEvaluator:
     ) -> Dict[str, float]:
         """估计特征重要性（当模型不直接提供时）"""
         try:
-            # 使用排列重要性方法估算
-            from sklearn.inspection import permutation_importance
-            
-            # 计算基线性能
-            baseline_score = model.score(X, y)
-            
-            # 计算每个特征的重要性
-            importances = {}
-            for i, feature_name in enumerate(feature_names):
-                # 创建扰动数据
-                X_permuted = X.copy()
-                # 扰动第i个特征
-                np.random.shuffle(X_permuted[:, i])
+            # 首先尝试直接获取特征重要性
+            if hasattr(model, 'feature_importances_'):
+                importances = model.feature_importances_
+                return dict(zip(feature_names, importances))
+            elif hasattr(model, 'coef_'):
+                # 对于线性模型，使用系数的绝对值
+                importances = np.abs(model.coef_[0]) if model.coef_.ndim > 1 else np.abs(model.coef_)
+                return dict(zip(feature_names, importances))
+            elif hasattr(model, 'model') and hasattr(model.model, 'feature_importances_'):
+                # 对于封装模型（如XGBoostModel），尝试访问内部模型的特征重要性
+                importances = model.model.feature_importances_
+                return dict(zip(feature_names, importances))
+            else:
+                # 使用排列重要性方法估算
+                from sklearn.inspection import permutation_importance
                 
-                # 计算扰动后的性能
-                permuted_score = model.score(X_permuted, y)
+                # 使用模型的predict方法计算基线性能
+                y_pred = model.predict(X)
+                from sklearn.metrics import accuracy_score
+                baseline_score = accuracy_score(y, y_pred)
                 
-                # 计算重要性（性能下降越大，特征越重要）
-                importances[feature_name] = baseline_score - permuted_score
-            
-            # 归一化重要性
-            total_importance = sum(abs(v) for v in importances.values())
-            if total_importance > 0:
-                importances = {k: abs(v)/total_importance for k, v in importances.items()}
-            
-            return importances
+                # 计算每个特征的重要性
+                importances = {}
+                for i, feature_name in enumerate(feature_names):
+                    # 创建扰动数据
+                    X_permuted = X.copy()
+                    # 扰动第i个特征
+                    np.random.shuffle(X_permuted[:, i])
+                    
+                    # 计算扰动后的性能
+                    y_pred_permuted = model.predict(X_permuted)
+                    permuted_score = accuracy_score(y, y_pred_permuted)
+                    
+                    # 计算重要性（性能下降越大，特征越重要）
+                    importances[feature_name] = baseline_score - permuted_score
+                
+                # 归一化重要性
+                total_importance = sum(abs(v) for v in importances.values())
+                if total_importance > 0:
+                    importances = {k: abs(v)/total_importance for k, v in importances.items()}
+                
+                return importances
         except Exception as e:
             logger.warning(f"估算特征重要性失败: {e}")
             # 返回均匀分布的重要性

@@ -1,5 +1,36 @@
 import os
+import sys
+
+# 在绝对最早期设置环境变量
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# 在绝对最早期重定向stderr
+class DevNull:
+    def write(self, msg):
+        # 检查是否包含TensorFlow相关关键词
+        tf_keywords = [
+            'tensorflow', 'cuda', 'cudnn', 'cufft', 'cublas', 
+            'absl', 'computation_placer', 'oneDNN', 'stream_executor',
+            'external/local_xla'
+        ]
+        
+        msg_lower = str(msg).lower()
+        # 如果包含任何TF关键词，直接丢弃
+        for keyword in tf_keywords:
+            if keyword in msg_lower:
+                return
+        # 否则正常输出到原始stderr
+        sys.__stderr__.write(msg)
+    
+    def flush(self):
+        sys.__stderr__.flush()
+
+# 重定向stderr到我们的过滤器
+sys.stderr = DevNull()
+
 import json
+import logging
 import typer
 from datetime import datetime
 from typing import Optional
@@ -8,9 +39,14 @@ from src.config.config_manager import ConfigManager
 from src.detection.feedback_processor import FeedbackProcessor
 from src.utils.logger import setup_logging, get_logger
 
-app = typer.Typer(help="反馈处理相关命令")
+app = typer.Typer(help="反馈处理相关命令", invoke_without_command=True)
 
 logger = get_logger("cli.feedback")
+
+@app.callback()
+def main():
+    """反馈处理相关命令"""
+    pass
 
 @app.command(name="submit")
 def submit_feedback(
@@ -19,7 +55,7 @@ def submit_feedback(
         help="检测ID"
     ),
     is_anomaly: bool = typer.Option(
-        ..., "--is-anomaly", "-a",
+        False, "--is-anomaly/--no-anomaly", "-a/-na",
         help="是否为真实异常"
     ),
     anomaly_type: Optional[str] = typer.Option(
@@ -39,7 +75,14 @@ def submit_feedback(
     提交检测结果反馈
     """
     # 配置日志
-    setup_logging(level=log_level)
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR
+    }
+    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    setup_logging(log_level=actual_log_level)
     
     try:
         # 加载配置
@@ -90,7 +133,14 @@ def list_feedback(
     列出已提交的反馈
     """
     # 配置日志
-    setup_logging(level=log_level)
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR
+    }
+    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    setup_logging(log_level=actual_log_level)
     
     try:
         # 加载配置
@@ -153,7 +203,14 @@ def cleanup_feedback(
     清理旧的反馈数据
     """
     # 配置日志
-    setup_logging(level=log_level)
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR
+    }
+    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    setup_logging(log_level=actual_log_level)
     
     try:
         # 加载配置

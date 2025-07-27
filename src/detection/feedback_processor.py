@@ -44,19 +44,30 @@ class FeedbackProcessor(BaseComponent):
         """加载已有的反馈数据"""
         try:
             # 遍历反馈目录
+            feedback_files = []
             for filename in os.listdir(self.feedback_dir):
                 if not filename.endswith(".json"):
                     continue
+                feedback_files.append(filename)
                     
+            self.logger.info(f"已加载 {len(feedback_files)} 个反馈文件")
+            
+            for filename in feedback_files:
                 file_path = os.path.join(self.feedback_dir, filename)
                 with open(file_path, "r") as f:
-                    feedbacks = json.load(f)
+                    try:
+                        feedbacks = json.load(f)
+                        
+                        # 处理每个反馈
+                        for feedback in feedbacks:
+                            self._process_feedback_item(feedback, save_to_disk=False)
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"解析反馈文件 {filename} 失败: {str(e)}")
+                        # 创建备份并删除损坏文件
+                        backup_path = file_path + ".bak"
+                        os.rename(file_path, backup_path)
+                        self.logger.info(f"已将损坏的反馈文件备份到 {backup_path}")
                     
-                # 处理每个反馈
-                for feedback in feedbacks:
-                    self._process_feedback_item(feedback, save_to_disk=False)
-                    
-            self.logger.info(f"已加载 {len(os.listdir(self.feedback_dir))} 个反馈文件")
         except Exception as e:
             self.logger.error(f"加载已有反馈时出错: {str(e)}")
     
@@ -84,12 +95,20 @@ class FeedbackProcessor(BaseComponent):
             
         # 将反馈放入队列
         try:
-            self.feedback_queue.put(feedback, block=False)
+            # 先尝试放入队列，如果队列满则直接处理
+            if not self.feedback_queue.full():
+                self.feedback_queue.put(feedback, block=False)
+            
+            # 无论队列是否满，都立即处理反馈以确保数据保存
+            self._process_feedback_item(feedback)
+            
             self.logger.debug(f"已接收反馈: {feedback['anomaly_id']}")
             return True
         except Exception as e:
             self.logger.error(f"提交反馈失败: {str(e)}")
-            return False
+            # 出现异常时直接处理反馈以避免数据丢失
+            self._process_feedback_item(feedback)
+            return True
     
     def _process_feedback_item(self, feedback, save_to_disk=True):
         """处理单个反馈项"""
@@ -148,18 +167,30 @@ class FeedbackProcessor(BaseComponent):
                 date_str = datetime.fromtimestamp(feedback["timestamp"]).strftime("%Y%m%d")
                 feedback_file = os.path.join(self.feedback_dir, f"feedback_{date_str}.json")
                 
-                # 读取已有反馈
-                existing_feedbacks = []
-                if os.path.exists(feedback_file):
-                    with open(feedback_file, "r") as f:
-                        existing_feedbacks = json.load(f)
-                
-                # 添加新反馈
-                existing_feedbacks.append(feedback)
-                
-                # 保存更新后的反馈
-                with open(feedback_file, "w") as f:
-                    json.dump(existing_feedbacks, f, indent=2, ensure_ascii=False)
+                # 使用原子写入操作确保数据完整性
+                temp_file = feedback_file + ".tmp"
+                try:
+                    # 读取已有反馈
+                    existing_feedbacks = []
+                    if os.path.exists(feedback_file):
+                        with open(feedback_file, "r") as f:
+                            existing_feedbacks = json.load(f)
+                    
+                    # 添加新反馈
+                    existing_feedbacks.append(feedback)
+                    
+                    # 写入临时文件
+                    with open(temp_file, "w") as f:
+                        json.dump(existing_feedbacks, f, indent=2, ensure_ascii=False)
+                    
+                    # 原子替换
+                    os.replace(temp_file, feedback_file)
+                    self.logger.debug(f"反馈已保存到文件: {feedback_file}")
+                except (json.JSONDecodeError, IOError) as e:
+                    self.logger.error(f"保存反馈文件 {feedback_file} 时出错: {str(e)}")
+                    # 清理临时文件
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
             
             # 如果有特征提取器，通知其更新特征重要性
             if self.feature_extractor and hasattr(self.feature_extractor, "update_feature_performance"):

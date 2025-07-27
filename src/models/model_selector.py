@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import numpy as np
 from typing import Optional, Dict, Any
 from src.utils.logger import get_logger
 from src.config.config_manager import ConfigManager
@@ -31,6 +32,11 @@ class ModelSelector(BaseComponent):
         self._best_model_cache = {}
         self._cache_expiry = 300  # 缓存过期时间(秒)
         self._cache_update_time = time.time()
+        
+        # 新增属性用于基于特征选择模型
+        self.model_weights = {}
+        self.selection_history = []
+        self.feature_importance = {}
     
     def get_status(self) -> Dict[str, any]:
         """
@@ -91,72 +97,100 @@ class ModelSelector(BaseComponent):
     def _save_performance_history(self) -> None:
         """保存模型性能历史记录到文件"""
         try:
+            # 确保所有数值都是JSON可序列化的类型
+            def convert_to_serializable(obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, dict):
+                    return {key: convert_to_serializable(value) for key, value in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [convert_to_serializable(item) for item in obj]
+                else:
+                    return obj
+            
+            serializable_history = convert_to_serializable(self.performance_history)
+            
             with open(self.performance_history_path, "w") as f:
-                json.dump(self.performance_history, f, indent=2)
+                json.dump(serializable_history, f, indent=2)
             self.logger.debug(f"已保存模型性能历史到 {self.performance_history_path}")
         except Exception as e:
             self.logger.error(f"保存模型性能历史失败: {str(e)}")
     
     def update_performance(
-        self, 
-        protocol: str or int, 
-        model_type: str, 
-        metrics: Dict[str, float]
+        self,
+        protocol,
+        model_type: str,
+        metrics: Dict[str, float],
+        sample_count: Optional[int] = None
     ) -> None:
         """
-        更新协议-模型的性能记录
+        更新模型性能记录
         
-        参数:
-            protocol: 协议名称或编号
+        Args:
+            protocol: 协议类型（整数协议号或字符串协议名）
             model_type: 模型类型
-            metrics: 性能指标字典，应包含f1, precision, recall等
+            metrics: 性能指标字典
+            sample_count: 样本数量
         """
-        # 标准化协议名称
-        if isinstance(protocol, int):
-            proto_spec = get_protocol_spec(protocol)
-            protocol_name = proto_spec["name"]
-        else:
-            protocol_name = protocol.lower()
-            # 验证协议名称是否有效
-            try:
-                get_protocol_number(protocol_name)
-            except ValueError:
-                self.logger.warning(f"未知协议: {protocol_name}，使用默认处理")
-        
-        # 添加时间戳
-        metrics_with_time = metrics.copy()
-        metrics_with_time["timestamp"] = time.time()
-        
-        # 更新性能历史
-        if protocol_name not in self.performance_history:
-            self.performance_history[protocol_name] = {}
-        
-        self.performance_history[protocol_name][model_type] = metrics_with_time
-        
-        # 保存更新
-        self._save_performance_history()
+        try:
+            # 标准化协议名称
+            if isinstance(protocol, (int, float, np.integer, np.floating)):
+                # 处理数值型协议号，包括numpy类型
+                if np.isnan(protocol):
+                    protocol_name = "unknown"
+                else:
+                    proto_spec = get_protocol_spec(int(protocol))
+                    protocol_name = proto_spec["name"]
+            else:
+                # 处理字符串协议名
+                protocol_name = str(protocol).lower()
+                if not protocol_name or protocol_name == "nan":
+                    protocol_name = "unknown"
+            
+            # 确保协议在性能历史中存在
+            if protocol_name not in self.performance_history:
+                self.performance_history[protocol_name] = {}
+            
+            # 更新性能记录
+            if model_type not in self.performance_history[protocol_name]:
+                self.performance_history[protocol_name][model_type] = {}
+            
+            # 更新指标
+            self.performance_history[protocol_name][model_type].update(metrics)
+            
+            # 添加样本数量
+            if sample_count is not None:
+                self.performance_history[protocol_name][model_type]["sample_count"] = sample_count
+            
+            # 保存性能历史
+            self._save_performance_history()
+            
+            self.logger.debug(f"已更新协议 {protocol_name} 的 {model_type} 模型性能记录")
+            
+        except Exception as e:
+            self.logger.error(f"更新性能记录时出错: {str(e)}", exc_info=True)
         
         # 清除缓存
         self._invalidate_cache()
         
         self.logger.debug(f"已更新 {protocol_name} 协议的 {model_type} 模型性能记录")
     
-    def select_best_model(
-        self, 
-        protocol: str or int, 
-        candidates: Optional[list] = None
-    ) -> str:
+    def select_best_model(self, protocol, candidates=None):
         """
-        为指定协议选择最优模型
+        为指定协议选择最佳模型类型
         
-        参数:
-            protocol: 协议名称或编号
-            candidates: 候选模型列表，为None则使用协议默认偏好
+        Args:
+            protocol: 协议类型（整数协议号或字符串协议名）
+            candidates: 候选模型列表
             
-        返回:
-            最优模型类型名称
+        Returns:
+            最佳模型类型字符串
         """
-        # 检查缓存是否有效
+        # 检查缓存
         current_time = time.time()
         if (current_time - self._cache_update_time) < self._cache_expiry:
             cache_key = str(protocol)
@@ -164,13 +198,25 @@ class ModelSelector(BaseComponent):
                 return self._best_model_cache[cache_key]
         
         # 标准化协议名称
-        if isinstance(protocol, int):
-            proto_spec = get_protocol_spec(protocol)
-            protocol_name = proto_spec["name"]
+        if isinstance(protocol, (int, float, np.integer, np.floating)):
+            # 处理数值型协议号，包括numpy类型
+            # 特别处理NaN值
+            if np.isnan(protocol):
+                protocol_name = "unknown"
+                proto_spec = get_protocol_spec(None)  # 获取默认协议规范
+            else:
+                proto_spec = get_protocol_spec(int(protocol))
+                protocol_name = proto_spec["name"]
             default_candidates = proto_spec["model_preference"]
         else:
-            protocol_name = protocol.lower()
-            proto_spec = get_protocol_spec(get_protocol_number(protocol_name))
+            # 处理字符串协议名
+            protocol_name = str(protocol).lower()
+            # 处理空字符串或None
+            if not protocol_name or protocol_name == "nan":
+                protocol_name = "unknown"
+                proto_spec = get_protocol_spec(None)
+            else:
+                proto_spec = get_protocol_spec(get_protocol_number(protocol_name))
             default_candidates = proto_spec["model_preference"]
         
         # 确定候选模型
@@ -179,39 +225,42 @@ class ModelSelector(BaseComponent):
         # 如果没有性能记录，返回默认首选模型
         if protocol_name not in self.performance_history:
             best_model = model_candidates[0]
-            self.logger.debug(f"{protocol_name} 无性能记录，选择默认模型 {best_model}")
-            self._update_cache(str(protocol), best_model)
+            self._best_model_cache[str(protocol)] = best_model
+            self._cache_update_time = current_time
+            self.logger.debug(f"协议 {protocol_name} 无历史性能记录，使用默认模型: {best_model}")
             return best_model
         
-        # 获取该协议的所有模型性能记录
-        protocol_models = self.performance_history[protocol_name]
+        # 根据历史性能选择最佳模型
+        protocol_history = self.performance_history[protocol_name]
+        best_model = None
+        best_score = -1
         
-        # 过滤候选模型
-        valid_models = [m for m in model_candidates if m in protocol_models]
+        for model_type in model_candidates:
+            if model_type in protocol_history:
+                # 使用F1分数作为选择标准
+                metrics = protocol_history[model_type]
+                f1_score = metrics.get("f1", 0)
+                # 考虑样本数量的置信度
+                sample_count = metrics.get("sample_count", 0)
+                confidence = min(sample_count / 1000, 1.0)  # 1000样本以上置信度为1
+                
+                # 计算加权分数
+                weighted_score = f1_score * confidence
+                
+                if weighted_score > best_score:
+                    best_score = weighted_score
+                    best_model = model_type
         
-        # 如果没有有效的候选模型性能记录，返回默认首选模型
-        if not valid_models:
+        # 如果没有找到合适的模型或分数太低，使用默认模型
+        if not best_model or best_score < 0.1:
             best_model = model_candidates[0]
-            self.logger.debug(f"{protocol_name} 无有效模型性能记录，选择默认模型 {best_model}")
-            self._update_cache(str(protocol), best_model)
-            return best_model
-        
-        # 按F1分数排序，选择最优模型
-        # 对于相同分数，优先选择最新更新的模型
-        def model_rating(model_type):
-            metrics = protocol_models[model_type]
-            return (metrics["f1"], metrics["timestamp"])
-        
-        valid_models.sort(key=model_rating, reverse=True)
-        best_model = valid_models[0]
-        
-        self.logger.debug(
-            f"为 {protocol_name} 选择最优模型 {best_model} "
-            f"(F1: {protocol_models[best_model]['f1']:.4f})"
-        )
+            self.logger.debug(f"协议 {protocol_name} 历史性能不佳，使用默认模型: {best_model}")
+        else:
+            self.logger.debug(f"协议 {protocol_name} 选择模型: {best_model} (得分: {best_score:.3f})")
         
         # 更新缓存
-        self._update_cache(str(protocol), best_model)
+        self._best_model_cache[str(protocol)] = best_model
+        self._cache_update_time = current_time
         
         return best_model
     

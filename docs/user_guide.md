@@ -51,6 +51,8 @@ source venv/bin/activate
 # 安装依赖
 # https://mirrors.aliyun.com/pypi/simple/ or https://pypi.tuna.tsinghua.edu.cn/simple
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
+
+pip install -e .
 ```
 
 ## 系统使用
@@ -284,25 +286,25 @@ anomaly-detector feedback cleanup --days 30
 **第一次闭环优化：**
 ```bash
 # 1. 生成测试数据
-anomaly-detector generate-test-data --count 5000
+anomaly-detector generate-test-data --samples 50000 --output data/test/
 
 # 2. 训练模型
-anomaly-detector train once --model xgboost --data data/processed/model_features_data.csv
+anomaly-detector train --model xgboost --data data/test/model_features_data.csv
 
 # 3. 评估模型性能
-anomaly-detector train evaluate --model xgboost
+anomaly-detector train evaluate --type xgboost
 
 # 4. 查看生成的评估报告（假定报告名为reports/xgboost_evaluation_20250727_122142.json）
 #    根据报告中的检测结果ID提交反馈
-anomaly-detector feedback submit --detection-id DETECTION_001 --is-anomaly true --anomaly-type "PortScan"
-anomaly-detector feedback submit --detection-id DETECTION_002 --is-anomaly false
-anomaly-detector feedback submit --detection-id DETECTION_003 --is-anomaly true --anomaly-type "DDoS"
+anomaly-detector feedback submit --detection-id DETECTION_001 --is-anomaly --anomaly-type "PortScan"
+anomaly-detector feedback submit --detection-id DETECTION_002 --no-anomaly
+anomaly-detector feedback submit --detection-id DETECTION_003 --is-anomaly --anomaly-type "DDoS"
 
 # 5. 基于反馈优化模型
 anomaly-detector train optimize --feedback-based
 
 # 6. 再次训练优化后的模型
-anomaly-detector train once --model xgboost --data data/processed/model_features_data.csv
+anomaly-detector train --model xgboost --data data/test/model_features_data.csv
 ```
 
 **第二次闭环优化：**
@@ -314,8 +316,8 @@ anomaly-detector train continuous --background
 anomaly-detector start --interface eth0
 
 # 3. 等待系统运行一段时间后，检查新生成的检测结果并提交反馈
-anomaly-detector feedback submit --detection-id DETECTION_004 --is-anomaly true --anomaly-type "Malware"
-anomaly-detector feedback submit --detection-id DETECTION_005 --is-anomaly false
+anomaly-detector feedback submit --detection-id DETECTION_004 --is-anomaly --anomaly-type "Malware"
+anomaly-detector feedback submit --detection-id DETECTION_005 --is-anomaly
 
 # 4. 停止系统
 anomaly-detector stop

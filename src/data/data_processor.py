@@ -280,7 +280,28 @@ class DataProcessor:
         # 1. 处理缺失值
         self.logger.debug(f"清洗前数据形状: {cleaned_df.shape}，缺失值数量: {cleaned_df.isnull().sum().sum()}")
         
-        # 2. 处理异常值
+        # 2. 处理非数值字段（如IP地址）
+        # 删除或转换非数值字段
+        non_numeric_columns = []
+        for col in cleaned_df.columns:
+            if col in ['src_ip', 'dst_ip', 'src_mac', 'dst_mac']:
+                # 删除网络地址字段
+                non_numeric_columns.append(col)
+            elif cleaned_df[col].dtype == 'object':
+                # 检查object类型的列是否包含非数值数据
+                try:
+                    # 尝试转换为数值类型
+                    pd.to_numeric(cleaned_df[col], errors='raise')
+                except (ValueError, TypeError):
+                    # 如果转换失败，标记为非数值列
+                    non_numeric_columns.append(col)
+        
+        # 删除非数值列
+        if non_numeric_columns:
+            self.logger.info(f"删除非数值列: {non_numeric_columns}")
+            cleaned_df = cleaned_df.drop(columns=non_numeric_columns)
+        
+        # 3. 处理异常值
         # 处理数值特征中的异常值（如负的包大小）
         expected_numeric, _ = self.get_expected_feature_names()
         for col in expected_numeric:
@@ -294,7 +315,7 @@ class DataProcessor:
                           "dst_port_entropy", "outbound_packet_ratio", "inbound_packet_ratio"]:
                     cleaned_df[col] = cleaned_df[col].clip(lower=0)
         
-        # 3. 处理数据类型
+        # 4. 处理数据类型
         # 注意：timestamp列不应该作为特征使用，仅用于数据处理内部使用
         # 如果存在timestamp列，确保其为数值类型而不是datetime
         if "timestamp" in cleaned_df.columns:
@@ -304,6 +325,13 @@ class DataProcessor:
         
         if "label" in cleaned_df.columns:
             cleaned_df["label"] = cleaned_df["label"].astype(int)
+        
+        # 确保所有特征列都是数值类型
+        feature_columns = [col for col in cleaned_df.columns if col != 'label']
+        for col in feature_columns:
+            if cleaned_df[col].dtype == 'object':
+                # 尝试转换为数值类型
+                cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors='coerce')
         
         self.logger.debug(f"清洗后数据形状: {cleaned_df.shape}，缺失值数量: {cleaned_df.isnull().sum().sum()}")
         return cleaned_df

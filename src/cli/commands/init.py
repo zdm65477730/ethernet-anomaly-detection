@@ -75,7 +75,7 @@ def create_directories(dirs: List[str], overwrite: bool = False) -> Tuple[bool, 
     # 返回成功状态和失败列表
     return len(failed_dirs) == 0, failed_dirs
 
-app = typer.Typer(help="系统初始化命令")
+app = typer.Typer(help="系统初始化命令", invoke_without_command=True)
 
 # 没有需要修改的内容
 
@@ -174,8 +174,9 @@ DETECTION_RULES = {
     }
 }
 
-@app.command()
+@app.callback()
 def main(
+    ctx: typer.Context,
     config_dir: str = typer.Option(
         "config", "--config-dir", "-c",
         help="配置文件目录"
@@ -200,138 +201,138 @@ def main(
     """
     初始化系统配置和目录结构
     """
-    print_info("正在初始化异常检测系统...")
-    
-    try:
-        # 创建必要的目录
-        dirs_to_create = [
-            config_dir,
-            "data/raw",
-            "data/processed",
-            "data/test",
-            "models",
-            "logs",
-            "reports/evaluations",
-            "reports/detections"
-        ]
+    # 如果是直接调用init命令而不是子命令，则执行初始化
+    if ctx.invoked_subcommand is None:
+        print_info("正在初始化异常检测系统...")
         
-        success, failed = create_directories(dirs_to_create, overwrite=force)
-        if not success:
-            print_error(f"创建目录失败: {', '.join(failed)}")
-            raise typer.Exit(code=1)
-        
-        # 创建默认配置文件
-        config_file = f"{config_dir}/config.yaml"
-        if not force and ConfigManager.config_file_exists(config_dir):
-            if not confirm("配置文件已存在，是否覆盖?"):
-                print_info("跳过配置文件创建")
+        try:
+            # 创建必要的目录
+            dirs_to_create = [
+                config_dir,
+                "data/raw",
+                "data/processed",
+                "data/test",
+                "models",
+                "logs",
+                "reports/evaluations",
+                "reports/detections"
+            ]
+            
+            success, failed = create_directories(dirs_to_create, overwrite=force)
+            if not success:
+                print_error(f"创建目录失败: {', '.join(failed)}")
+                raise typer.Exit(code=1)
+            
+            # 创建默认配置文件
+            config_file = f"{config_dir}/config.yaml"
+            if not force and ConfigManager.config_file_exists(config_dir):
+                if not confirm("配置文件已存在，是否覆盖?"):
+                    print_info("跳过配置文件创建")
+                else:
+                    ConfigManager.create_default_config(config_dir)
+                    print_success(f"已创建配置文件: {config_file}")
             else:
                 ConfigManager.create_default_config(config_dir)
                 print_success(f"已创建配置文件: {config_file}")
-        else:
-            ConfigManager.create_default_config(config_dir)
-            print_success(f"已创建配置文件: {config_file}")
+            
+            # 获取可用网络接口
+            interfaces = get_available_interfaces()
+            if interfaces:
+                print_info("可用网络接口:")
+                for interface in interfaces:
+                    print(f"  - {interface}")
+            else:
+                print_warning("未找到可用网络接口")
+            
+            # 生成示例数据（如果需要）
+            if generate_data:
+                print_info(f"正在生成 {samples} 个示例数据样本...")
+                try:
+                    generator = DataGenerator()
+                    result = generator.generate(
+                        num_samples=samples,
+                        output_dir="data/processed"
+                    )
+                    print_success("示例数据生成完成!")
+                    
+                    # 同时将测试数据复制到data/test目录以支持模型评估
+                    import shutil
+                    import pandas as pd
+                    if "test_path" in result:
+                        # 如果生成时已经分割了训练集和测试集
+                        shutil.copy2(result["test_path"], "data/test/test_data.csv")
+                        print_success("测试数据已复制到 data/test 目录!")
+                    else:
+                        # 如果没有分割，则从完整数据集中复制一部分作为测试数据
+                        full_data_path = result.get("full_path", "data/processed/full_data.csv")
+                        df = pd.read_csv(full_data_path)
+                        # 取20%作为测试数据
+                        test_df = df.sample(frac=0.2, random_state=42)
+                        test_df.to_csv("data/test/test_data.csv", index=False)
+                        print_success("测试数据已生成并保存到 data/test 目录!")
+                        
+                except Exception as e:
+                    print_error(f"生成示例数据时出错: {str(e)}")
+            
+        except Exception as e:
+            print_error(f"初始化系统时发生错误: {str(e)}")
+            raise typer.Exit(code=1)
         
         # 获取可用网络接口
         interfaces = get_available_interfaces()
+        selected_interface = ""
+        
         if interfaces:
             print_info("可用网络接口:")
-            for interface in interfaces:
-                print(f"  - {interface}")
-        else:
-            print_warning("未找到可用网络接口")
-        
-        # 生成示例数据（如果需要）
-        if generate_data:
-            print_info(f"正在生成 {samples} 个示例数据样本...")
+            for i, iface in enumerate(interfaces, 1):
+                print(f"  {i}. {iface}")
+            
             try:
-                generator = DataGenerator()
-                result = generator.generate(
-                    num_samples=samples,
-                    output_dir="data/processed"
-                )
-                print_success("示例数据生成完成!")
-                
-                # 同时将测试数据复制到data/test目录以支持模型评估
-                import shutil
-                import pandas as pd
-                if "test_path" in result:
-                    # 如果生成时已经分割了训练集和测试集
-                    shutil.copy2(result["test_path"], "data/test/test_data.csv")
-                    print_success("测试数据已复制到 data/test 目录!")
-                else:
-                    # 如果没有分割，则从完整数据集中复制一部分作为测试数据
-                    full_data_path = result.get("full_path", "data/processed/full_data.csv")
-                    df = pd.read_csv(full_data_path)
-                    # 取20%作为测试数据
-                    test_df = df.sample(frac=0.2, random_state=42)
-                    test_df.to_csv("data/test/test_data.csv", index=False)
-                    print_success("测试数据已生成并保存到 data/test 目录!")
-                    
-            except Exception as e:
-                print_error(f"生成示例数据时出错: {str(e)}")
+                choice = input("请选择默认监听接口(输入序号，直接回车则留空): ").strip()
+                if choice:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(interfaces):
+                        selected_interface = interfaces[idx]
+                        print_info(f"已选择默认接口: {selected_interface}")
+            except (ValueError, IndexError):
+                print_warning("无效选择，将使用空接口配置")
         
-        print_success("系统初始化完成!")
+        # 生成配置文件
+        config = DEFAULT_CONFIG.copy()
+        config["capture"]["interface"] = selected_interface
         
-    except Exception as e:
-        print_error(f"初始化系统时发生错误: {str(e)}")
-        raise typer.Exit(code=1)
-    
-    # 获取可用网络接口
-    interfaces = get_available_interfaces()
-    selected_interface = ""
-    
-    if interfaces:
-        print_info("可用网络接口:")
-        for i, iface in enumerate(interfaces, 1):
-            print(f"  {i}. {iface}")
-        
+        # 保存主配置
+        main_config_path = os.path.join(config_dir, "config.yaml")
         try:
-            choice = input("请选择默认监听接口(输入序号，直接回车则留空): ").strip()
-            if choice:
-                idx = int(choice) - 1
-                if 0 <= idx < len(interfaces):
-                    selected_interface = interfaces[idx]
-                    print_info(f"已选择默认接口: {selected_interface}")
-        except (ValueError, IndexError):
-            print_warning("无效选择，将使用空接口配置")
-    
-    # 生成配置文件
-    config = DEFAULT_CONFIG.copy()
-    config["capture"]["interface"] = selected_interface
-    
-    # 保存主配置
-    main_config_path = os.path.join(config_dir, "config.yaml")
-    try:
-        with open(main_config_path, "w") as f:
-            yaml.dump(config, f, sort_keys=False, default_flow_style=False)
-        print_success(f"已生成主配置文件: {main_config_path}")
-    except Exception as e:
-        print_error(f"生成主配置文件失败: {str(e)}")
-        raise typer.Exit(code=1)
-    
-    # 保存模型配置
-    model_config_path = os.path.join(config_dir, "model_config.yaml")
-    try:
-        with open(model_config_path, "w") as f:
-            yaml.dump(MODEL_CONFIG, f, sort_keys=False, default_flow_style=False)
-        print_success(f"已生成模型配置文件: {model_config_path}")
-    except Exception as e:
-        print_error(f"生成模型配置文件失败: {str(e)}")
-        raise typer.Exit(code=1)
-    
-    # 保存检测规则配置
-    rules_config_path = os.path.join(config_dir, "detection_rules.yaml")
-    try:
-        with open(rules_config_path, "w") as f:
-            yaml.dump(DETECTION_RULES, f, sort_keys=False, default_flow_style=False)
-        print_success(f"已生成检测规则配置文件: {rules_config_path}")
-    except Exception as e:
-        print_error(f"生成检测规则配置文件失败: {str(e)}")
-        raise typer.Exit(code=1)
-    
-    print_success("系统初始化完成！")
-    print_info("下一步可以使用 'anomaly-detector start' 命令启动系统")
+            with open(main_config_path, "w") as f:
+                yaml.dump(config, f, sort_keys=False, default_flow_style=False)
+            print_success(f"已生成主配置文件: {main_config_path}")
+        except Exception as e:
+            print_error(f"生成主配置文件失败: {str(e)}")
+            raise typer.Exit(code=1)
+        
+        # 保存模型配置
+        model_config_path = os.path.join(config_dir, "model_config.yaml")
+        try:
+            with open(model_config_path, "w") as f:
+                yaml.dump(MODEL_CONFIG, f, sort_keys=False, default_flow_style=False)
+            print_success(f"已生成模型配置文件: {model_config_path}")
+        except Exception as e:
+            print_error(f"生成模型配置文件失败: {str(e)}")
+            raise typer.Exit(code=1)
+        
+        # 保存检测规则配置
+        rules_config_path = os.path.join(config_dir, "detection_rules.yaml")
+        try:
+            with open(rules_config_path, "w") as f:
+                yaml.dump(DETECTION_RULES, f, sort_keys=False, default_flow_style=False)
+            print_success(f"已生成检测规则配置文件: {rules_config_path}")
+        except Exception as e:
+            print_error(f"生成检测规则配置文件失败: {str(e)}")
+            raise typer.Exit(code=1)
+        
+        print_success("系统初始化完成！")
+        print_info("下一步可以使用 'anomaly-detector start' 命令启动系统")
 
 if __name__ == "__main__":
-    typer.run(main)
+    app()

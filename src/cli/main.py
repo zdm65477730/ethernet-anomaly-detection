@@ -33,7 +33,11 @@ class FilteredStderr:
             'computation_placer',
             'oneDNN',
             'stream_executor',
-            'external/local_xla'
+            'external/local_xla',
+            'eigen',
+            'registering factory',
+            'attempting to register',
+            'please check linkage'
         ]
     
     def write(self, msg):
@@ -57,8 +61,8 @@ from src.cli.commands.train import train_app
 from src.cli.commands.init import app as init_app
 from src.cli.commands.generate_test_data import app as generate_test_data_app
 from src.cli.commands.status import main as status_command
-from src.cli.commands.start import start_command
-from src.cli.commands.stop import stop_command
+from src.cli.commands.start import app as start_app
+from src.cli.commands.stop import app as stop_app
 from src.cli.commands.report import app as report_app
 from src.cli.commands.feedback import app as feedback_app
 from src.cli.utils import print_info, print_error
@@ -73,14 +77,14 @@ app = typer.Typer(
 # 添加子命令
 app.add_typer(init_app, name="init", help="系统初始化命令")
 app.add_typer(generate_test_data_app, name="generate-test-data", help="生成测试数据命令")
-app.command(name="stop")(stop_command)
 app.add_typer(train_app, name="train", help="模型训练命令")
+app.add_typer(start_app, name="start", help="启动系统命令")
+app.add_typer(stop_app, name="stop", help="停止系统命令")
 app.add_typer(report_app, name="report", help="检测报告命令")
 app.add_typer(feedback_app, name="feedback", help="反馈处理命令")
 
 # 添加简单命令
 app.command(name="status")(status_command)
-app.command(name="start")(start_command)
 
 @app.callback()
 def main_callback(

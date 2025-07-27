@@ -12,6 +12,24 @@ DEFAULT_LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..
 _initialized_loggers = set()
 
 
+def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+    """获取指定名称的日志器"""
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    
+    # 避免重复添加处理器和日志传播
+    if not logger.handlers:
+        # 控制台处理器
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
+        logger.addHandler(console_handler)
+        
+        # 防止日志传播到父级记录器，避免重复输出
+        logger.propagate = False
+    
+    return logger
+
+
 def setup_logging(
     log_dir: str = DEFAULT_LOG_DIR,
     log_level: int = logging.INFO,
@@ -60,22 +78,6 @@ def setup_logging(
     # 添加处理器到根记录器
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
-
-
-def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
-    """获取指定名称的日志器"""
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    
-    # 避免重复添加处理器
-    if name not in _initialized_loggers:
-        # 控制台处理器
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
-        logger.addHandler(console_handler)
-        _initialized_loggers.add(name)
-    
-    return logger
 
 
 def setup_rotating_logger(

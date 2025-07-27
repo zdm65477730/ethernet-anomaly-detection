@@ -119,8 +119,19 @@ class ModelFactory(BaseComponent):
             是否保存成功
         """
         try:
+            # 检查model_path是否为空
+            if not model_path:
+                self.logger.error("模型保存路径为空")
+                return False
+                
             # 确保目录存在
-            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            model_dir = os.path.dirname(model_path)
+            if model_dir:  # 只有当目录路径非空时才创建目录
+                os.makedirs(model_dir, exist_ok=True)
+            else:
+                # 如果没有指定目录，使用默认模型目录
+                model_path = os.path.join(self.models_dir, os.path.basename(model_path))
+                os.makedirs(self.models_dir, exist_ok=True)
             
             # 保存模型
             model.save(model_path)

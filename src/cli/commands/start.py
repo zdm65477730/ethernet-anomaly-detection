@@ -1,6 +1,37 @@
+import os
+import sys
+
+# 在绝对最早期设置环境变量
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# 在绝对最早期重定向stderr
+class DevNull:
+    def write(self, msg):
+        # 检查是否包含TensorFlow相关关键词
+        tf_keywords = [
+            'tensorflow', 'cuda', 'cudnn', 'cufft', 'cublas', 
+            'absl', 'computation_placer', 'oneDNN', 'stream_executor',
+            'external/local_xla', 'eigen', 'registering factory',
+            'attempting to register', 'please check linkage'
+        ]
+        
+        msg_lower = str(msg).lower()
+        # 如果包含任何TF关键词，直接丢弃
+        for keyword in tf_keywords:
+            if keyword in msg_lower:
+                return
+        # 否则正常输出到原始stderr
+        sys.__stderr__.write(msg)
+    
+    def flush(self):
+        sys.__stderr__.flush()
+
+# 重定向stderr到我们的过滤器
+sys.stderr = DevNull()
+
 import typer
 from typing import Optional
-import os
 import signal
 import logging
 import time
@@ -9,7 +40,7 @@ from src.config.config_manager import ConfigManager
 from src.cli.utils import print_info, print_success, print_error, print_warning
 from src.utils.logger import setup_logging, get_logger
 
-app = typer.Typer(help="系统控制命令")
+app = typer.Typer(help="系统控制命令", invoke_without_command=True)
 
 # 全局变量用于信号处理
 _running = True
@@ -41,8 +72,17 @@ def _remove_pid_file():
     except Exception as e:
         print_warning(f"删除PID文件失败: {e}")
 
-@app.command(name="start")
-def start_command(
+@app.callback()
+def main(
+    ctx: typer.Context,
+    config_dir: str = typer.Option(
+        "config", "--config-dir", "-c",
+        help="配置文件目录"
+    ),
+    daemon: bool = typer.Option(
+        False, "--daemon", "-d",
+        help="以守护进程模式运行"
+    ),
     interface: str = typer.Option(
         None, "--interface", "-i",
         help="网络接口名称"
@@ -55,17 +95,37 @@ def start_command(
         None, "--offline-file", "-o",
         help="离线pcap文件路径"
     ),
-    config_dir: str = typer.Option(
-        "config", "--config-dir", "-c",
-        help="配置文件目录"
-    ),
     log_level: str = typer.Option(
         "INFO", "--log-level", "-l",
         help="日志级别"
-    )
+    ),
 ):
     """
     启动异常检测系统
+    
+    如果直接运行start命令而没有指定子命令，
+    则会启动异常检测系统。
+    
+    示例:
+    
+    \b
+    $ python -m src.cli.commands.start
+    $ python -m src.cli.commands.start --interface eth0
+    """
+    # 如果是直接调用start命令而不是子命令，则执行启动
+    if ctx.invoked_subcommand is None:
+        start_system(config_dir, daemon, interface, filter, offline_file, log_level)
+
+def start_system(
+    config_dir: str = "config",
+    daemon: bool = False,
+    interface: str = None,
+    filter: str = None,
+    offline_file: str = None,
+    log_level: str = "INFO"
+):
+    """
+    启动异常检测系统的核心函数
     """
     # 配置日志
     log_level_map = {
@@ -138,6 +198,34 @@ def start_command(
     except Exception as e:
         print_error(f"启动系统时发生错误: {str(e)}")
         raise typer.Exit(code=1)
+
+@app.command(name="start")
+def start_command(
+    interface: str = typer.Option(
+        None, "--interface", "-i",
+        help="网络接口名称"
+    ),
+    filter: str = typer.Option(
+        None, "--filter", "-f",
+        help="BPF过滤规则"
+    ),
+    offline_file: str = typer.Option(
+        None, "--offline-file", "-o",
+        help="离线pcap文件路径"
+    ),
+    config_dir: str = typer.Option(
+        "config", "--config-dir", "-c",
+        help="配置文件目录"
+    ),
+    log_level: str = typer.Option(
+        "INFO", "--log-level", "-l",
+        help="日志级别"
+    )
+):
+    """
+    启动异常检测系统
+    """
+    start_system(config_dir, False, interface, filter, offline_file, log_level)
 
 @app.command(name="stop")
 def stop_command():
