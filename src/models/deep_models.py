@@ -23,7 +23,8 @@ class LSTMModel(BaseModel):
             "dropout": 0.2,
             "batch_size": 32,
             "epochs": 20,
-            "learning_rate": 0.001
+            "learning_rate": 0.001,
+            "threshold": 0.5  # 可调分类阈值
         }
         params = {**default_params,** kwargs}
         super().__init__(**params)
@@ -36,14 +37,20 @@ class LSTMModel(BaseModel):
             raise ValueError("特征维度未设置，请先调用fit或设置params['n_features']")
             
         model = Sequential(name="lstm_anomaly_detector")
-        model.add(InputLayer(input_shape=(self.sequence_length, self.params["n_features"])))
+        # 修复：使用shape参数替代已弃用的input_shape参数
+        model.add(InputLayer(shape=(self.sequence_length, self.params["n_features"])))
         
-        # 添加LSTM层
+        # 添加LSTM层 - 增强架构
         for i, units in enumerate(self.params["lstm_units"]):
             return_sequences = i != len(self.params["lstm_units"]) - 1
-            model.add(LSTM(units, return_sequences=return_sequences))
+            model.add(LSTM(units, return_sequences=return_sequences, 
+                          dropout=self.params["dropout"]/2, 
+                          recurrent_dropout=self.params["dropout"]/2))
             model.add(BatchNormalization())
-            model.add(Dropout(self.params["dropout"]))
+            # 添加额外的密集层以增强表达能力
+            if not return_sequences:
+                model.add(Dense(units//2, activation="relu"))
+                model.add(Dropout(self.params["dropout"]))
         
         # 输出层（二分类）
         model.add(Dense(1, activation="sigmoid"))
@@ -86,6 +93,26 @@ class LSTMModel(BaseModel):
             f"特征数: {self.params['n_features']}"
         )
         
+        # 保存训练数据用于特征重要性计算（只保存一部分以节省内存）
+        # 只保存前1000个样本用于特征重要性计算，以节省内存
+        max_samples = min(1000, len(X))
+        if isinstance(X, pd.DataFrame):
+            self._X_train = X.iloc[:max_samples].copy()
+        else:
+            self._X_train = X[:max_samples].copy()
+        if isinstance(y, pd.Series):
+            self._y_train = y.iloc[:max_samples].copy()
+        else:
+            self._y_train = y[:max_samples].copy()
+        
+        # 计算类别权重以处理不平衡数据
+        from sklearn.utils.class_weight import compute_class_weight
+        classes = np.unique(y)
+        class_weights = compute_class_weight('balanced', classes=classes, y=y)
+        class_weight_dict = dict(zip(classes, class_weights))
+        
+        self.logger.info(f"类别权重: {class_weight_dict}")
+        
         # 准备回调函数
         callbacks = [
             EarlyStopping(patience=3, monitor="val_loss", restore_best_weights=True),
@@ -96,7 +123,7 @@ class LSTMModel(BaseModel):
                 verbose=0
             )
         ]
-        
+
         # 训练模型
         history = self.model.fit(
             X, y,
@@ -105,6 +132,7 @@ class LSTMModel(BaseModel):
             validation_split=kwargs.get("validation_split", 0.2),
             callbacks=callbacks,
             shuffle=True,
+            class_weight=class_weight_dict,  # 添加类别权重
             verbose=0
         )
         
@@ -141,14 +169,73 @@ class LSTMModel(BaseModel):
 
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         super().predict(X)
-        # 预测概率→标签（阈值0.5）
         proba = self.model.predict(X, verbose=0).flatten()
-        return (proba >= 0.5).astype(int)
+        # 使用可调阈值而不是固定的0.5
+        threshold = self.params.get("threshold", 0.5)
+        return (proba >= threshold).astype(int)
 
     def predict_proba(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         super().predict_proba(X)
         proba = self.model.predict(X, verbose=0).flatten()
         return np.column_stack((1 - proba, proba))  # [正常概率, 异常概率]
+
+    def score(self, X: Union[pd.DataFrame, np.ndarray], y: Union[pd.Series, np.ndarray]) -> float:
+        """
+        计算模型的准确率得分
+        
+        参数:
+            X: 特征数据（3D张量）
+            y: 真实标签
+            
+        返回:
+            准确率得分
+        """
+        from sklearn.metrics import accuracy_score
+        y_pred = self.predict(X)
+        return accuracy_score(y, y_pred)
+
+    def get_feature_importance(self) -> Optional[Dict[str, float]]:
+        """
+        获取特征重要性（使用Permutation Importance方法）
+        注意：此方法需要在模型训练后调用，并且需要训练数据来计算重要性
+        """
+        if not self.is_trained:
+            self.logger.warning("模型未训练，无法计算特征重要性")
+            return {}
+        
+        # 检查是否已存储训练数据用于计算特征重要性
+        if not hasattr(self, '_X_train') or not hasattr(self, '_y_train'):
+            self.logger.info("LSTM模型未保存训练数据，无法计算Permutation Importance。"
+                           "如需计算特征重要性，请在训练时保存训练数据。")
+            return None
+            
+        try:
+            # 导入permutation_importance函数
+            from sklearn.inspection import permutation_importance
+            
+            # 使用permutation importance计算特征重要性
+            # 这里使用模型自身的预测方法作为scoring函数
+            perm_importance = permutation_importance(
+                self, 
+                self._X_train, 
+                self._y_train, 
+                n_repeats=10,  # 重复次数
+                random_state=42,
+                n_jobs=1  # 为了避免潜在的多线程问题
+            )
+            
+            # 构建特征重要性字典
+            if self.feature_names:
+                importance_dict = dict(zip(self.feature_names, perm_importance.importances_mean))
+            else:
+                importance_dict = {f"feature_{i}": imp for i, imp in enumerate(perm_importance.importances_mean)}
+            
+            self.logger.info("成功计算LSTM模型的Permutation Importance特征重要性")
+            return importance_dict
+            
+        except Exception as e:
+            self.logger.warning(f"计算Permutation Importance时出错: {str(e)}")
+            return None
 
     def save(self, file_path: str) -> None:
         """保存模型（含架构和权重）"""
@@ -206,7 +293,8 @@ class MLPModel(BaseModel):
             "dropout": 0.3,
             "batch_size": 64,
             "epochs": 30,
-            "learning_rate": 0.001
+            "learning_rate": 0.001,
+            "threshold": 0.5  # 可调分类阈值
         }
         params = {** default_params, **kwargs}
         super().__init__(** params)
@@ -215,23 +303,33 @@ class MLPModel(BaseModel):
     def _build_model(self, n_features: int) -> tf.keras.Model:
         """构建MLP网络结构"""
         model = Sequential(name="mlp_anomaly_detector")
-        model.add(InputLayer(input_shape=(n_features,)))
+        model.add(InputLayer(shape=(n_features,)))
         
-        # 添加隐藏层
-        for units in self.params["hidden_units"]:
+        # 添加隐藏层 - 增强架构
+        for i, units in enumerate(self.params["hidden_units"]):
             model.add(Dense(units, activation="relu"))
             model.add(BatchNormalization())
+            # 添加残差连接（仅当输入输出维度匹配时）
+            if i > 0 and units == self.params["hidden_units"][i-1]:
+                # 添加残差连接层
+                model.add(tf.keras.layers.Add())
             model.add(Dropout(self.params["dropout"]))
+        
+        # 添加额外的密集层以增强表达能力
+        model.add(Dense(16, activation="relu"))
+        model.add(BatchNormalization())
+        model.add(Dropout(self.params["dropout"]/2))  # 减少dropout率
         
         # 输出层
         model.add(Dense(1, activation="sigmoid"))
         
-        # 编译
+        # 编译 - 添加class_weight处理不平衡数据
         optimizer = tf.keras.optimizers.Adam(learning_rate=self.params["learning_rate"])
         model.compile(
             optimizer=optimizer,
             loss="binary_crossentropy",
-            metrics=["accuracy", "Precision", "Recall"]
+            metrics=["accuracy", tf.keras.metrics.Precision(name="Precision"), 
+                     tf.keras.metrics.Recall(name="Recall")]
         )
         return model
 
@@ -246,6 +344,26 @@ class MLPModel(BaseModel):
         
         self.logger.info(f"开始MLP训练，样本数: {len(X)}, 特征数: {n_features}")
         
+        # 保存训练数据用于特征重要性计算（只保存一部分以节省内存）
+        # 只保存前1000个样本用于特征重要性计算，以节省内存
+        max_samples = min(1000, len(X))
+        if isinstance(X, pd.DataFrame):
+            self._X_train = X.iloc[:max_samples].copy()
+        else:
+            self._X_train = X[:max_samples].copy()
+        if isinstance(y, pd.Series):
+            self._y_train = y.iloc[:max_samples].copy()
+        else:
+            self._y_train = y[:max_samples].copy()
+        
+        # 计算类别权重以处理不平衡数据
+        from sklearn.utils.class_weight import compute_class_weight
+        classes = np.unique(y)
+        class_weights = compute_class_weight('balanced', classes=classes, y=y)
+        class_weight_dict = dict(zip(classes, class_weights))
+        
+        self.logger.info(f"类别权重: {class_weight_dict}")
+        
         # 训练
         history = self.model.fit(
             X, y,
@@ -253,14 +371,16 @@ class MLPModel(BaseModel):
             epochs=self.params["epochs"],
             validation_split=kwargs.get("validation_split", 0.2),
             callbacks=[EarlyStopping(patience=3, restore_best_weights=True)],
+            class_weight=class_weight_dict,  # 添加类别权重
             verbose=0
         )
         
+        # 修复：使用正确的指标名称（注意大小写）
         self.metrics = {
             "train_loss": history.history["loss"][-1],
             "val_loss": history.history["val_loss"][-1],
-            "precision": history.history["precision"][-1],
-            "recall": history.history["recall"][-1]
+            "precision": history.history["Precision"][-1],  # 大写开头
+            "recall": history.history["Recall"][-1]         # 大写开头
         }
         self.is_trained = True
 
@@ -285,12 +405,72 @@ class MLPModel(BaseModel):
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         super().predict(X)
         proba = self.model.predict(X, verbose=0).flatten()
-        return (proba >= 0.5).astype(int)
+        # 使用可调阈值而不是固定的0.5
+        threshold = self.params.get("threshold", 0.5)
+        return (proba >= threshold).astype(int)
 
     def predict_proba(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         super().predict_proba(X)
         proba = self.model.predict(X, verbose=0).flatten()
         return np.column_stack((1 - proba, proba))
+
+    def score(self, X: Union[pd.DataFrame, np.ndarray], y: Union[pd.Series, np.ndarray]) -> float:
+        """
+        计算模型的准确率得分
+        
+        参数:
+            X: 特征数据
+            y: 真实标签
+            
+        返回:
+            准确率得分
+        """
+        from sklearn.metrics import accuracy_score
+        y_pred = self.predict(X)
+        return accuracy_score(y, y_pred)
+
+    def get_feature_importance(self) -> Optional[Dict[str, float]]:
+        """
+        获取特征重要性（使用Permutation Importance方法）
+        注意：此方法需要在模型训练后调用，并且需要训练数据来计算重要性
+        """
+        if not self.is_trained:
+            self.logger.warning("模型未训练，无法计算特征重要性")
+            return {}
+        
+        # 检查是否已存储训练数据用于计算特征重要性
+        if not hasattr(self, '_X_train') or not hasattr(self, '_y_train'):
+            self.logger.info("MLP模型未保存训练数据，无法计算Permutation Importance。"
+                           "如需计算特征重要性，请在训练时保存训练数据。")
+            return None
+            
+        try:
+            # 导入permutation_importance函数
+            from sklearn.inspection import permutation_importance
+            
+            # 使用permutation importance计算特征重要性
+            # 这里使用模型自身的预测方法作为scoring函数
+            perm_importance = permutation_importance(
+                self, 
+                self._X_train, 
+                self._y_train, 
+                n_repeats=10,  # 重复次数
+                random_state=42,
+                n_jobs=1  # 为了避免潜在的多线程问题
+            )
+            
+            # 构建特征重要性字典
+            if self.feature_names:
+                importance_dict = dict(zip(self.feature_names, perm_importance.importances_mean))
+            else:
+                importance_dict = {f"feature_{i}": imp for i, imp in enumerate(perm_importance.importances_mean)}
+            
+            self.logger.info("成功计算MLP模型的Permutation Importance特征重要性")
+            return importance_dict
+            
+        except Exception as e:
+            self.logger.warning(f"计算Permutation Importance时出错: {str(e)}")
+            return None
 
     def save(self, file_path: str) -> None:
         os.makedirs(os.path.dirname(file_path), exist_ok=True)

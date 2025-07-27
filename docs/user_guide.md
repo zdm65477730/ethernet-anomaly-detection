@@ -176,6 +176,37 @@ anomaly-detector train automl
 anomaly-detector train automl --data data/processed/ --model xgboost
 ```
 
+### 自驱动闭环学习
+
+启动自驱动闭环学习系统，系统会自动监测数据质量、训练模型、评估性能并根据反馈进行优化：
+
+```bash
+# 启动自驱动闭环学习系统
+anomaly-detector train self-driving
+
+# 后台运行自驱动闭环学习系统
+anomaly-detector train self-driving --background
+```
+
+自驱动闭环学习系统具备以下特性：
+
+1. **自动数据监测** - 系统定期检查新数据的可用性
+2. **智能模型选择** - 根据数据特征自动选择最适合的模型类型
+3. **动态性能评估** - 持续评估模型性能并记录评估结果
+4. **反馈驱动优化** - 基于模型性能和特征重要性提供优化建议
+5. **自主再训练** - 当模型性能下降时自动触发再训练过程
+6. **模型演进** - 根据性能需求自动升级模型架构
+
+自驱动闭环系统工作流程：
+1. 系统启动后进入监测状态，定期检查是否有新数据
+2. 发现新数据后自动选择最佳模型类型进行训练
+3. 使用交叉验证等方法评估模型性能
+4. 基于评估结果和特征重要性分析生成优化建议
+5. 如果模型性能低于阈值，系统会自动进行再训练
+6. 所有优化历史都会被记录，用于后续分析和改进
+
+此功能使系统能够完全自主运行，无需人工干预即可持续优化模型性能。
+
 ## 检测报告
 
 系统可以生成检测报告和模型评估报告：
@@ -326,7 +357,7 @@ anomaly-detector stop
 anomaly-detector train optimize --feedback-based
 
 # 6. 运行AutoML训练进行全自动优化
-anomaly-detector train automl --model xgboost
+anomaly-detector train automl --model xgboost --data data/test/model_features_data.csv
 ```
 
 系统采用闭环优化机制，会根据收集到的反馈数据自动优化特征工程和模型参数，持续提升检测准确性。通过多次闭环优化，系统能够不断适应新的网络环境和威胁模式，提高检测准确率并降低误报率。

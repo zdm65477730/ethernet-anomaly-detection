@@ -648,6 +648,57 @@ def _perform_auto_optimization(model, model_type, metrics, config, model_factory
     except Exception as e:
         print_warning(f"自动优化失败: {str(e)}")
 
+def train_self_driving(
+    background: bool = typer.Option(
+        False, "--background", "-b",
+        help="后台运行模式"
+    ),
+    config_dir: str = typer.Option(
+        "config", "--config-dir", "-c",
+        help="配置文件目录"
+    ),
+    log_level: str = typer.Option(
+        "INFO", "--log-level", "-l",
+        help="日志级别 (DEBUG, INFO, WARNING, ERROR)"
+    )
+):
+    """启动自驱动自学习闭环系统"""
+    # 初始化日志
+    setup_logging(log_level=log_level)
+    
+    # 加载配置
+    try:
+        config = ConfigManager(config_dir=config_dir)
+    except Exception as e:
+        print_error(f"加载配置失败: {str(e)}")
+        raise typer.Exit(code=1)
+    
+    # 处理后台运行
+    if background:
+        try:
+            # 简单的后台运行实现
+            pid = os.fork()
+            if pid > 0:
+                print_success(f"自驱动学习系统已在后台启动 (PID: {pid})")
+                raise typer.Exit(code=0)
+        except OSError as e:
+            print_error(f"无法在后台运行: {str(e)}")
+            raise typer.Exit(code=1)
+    
+    # 初始化自驱动学习系统
+    try:
+        from src.training.self_driving_loop import SelfDrivingLoop
+        self_driving_loop = SelfDrivingLoop(config=config)
+        
+        print_info("启动自驱动自学习闭环系统...")
+        self_driving_loop.start_loop()
+        
+        print_success("自驱动学习系统已完成")
+        
+    except Exception as e:
+        print_error(f"自驱动学习系统运行失败: {str(e)}")
+        raise typer.Exit(code=1)
+
 def train_automl(
     data_path: Optional[str] = typer.Option(
         None, "--data", "-d",
@@ -734,6 +785,9 @@ def train_automl(
 
 # 注册AutoML训练命令
 train_app.command(name="automl", help="启动AutoML自动化模型训练")(train_automl)
+
+# 注册自驱动学习命令
+train_app.command(name="self-driving", help="启动自驱动自学习闭环系统")(train_self_driving)
 
 def main():
     """模型训练相关操作"""

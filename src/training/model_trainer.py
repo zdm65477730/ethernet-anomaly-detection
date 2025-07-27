@@ -228,9 +228,10 @@ class ModelTrainer:
             
             # 计算指标
             from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
-            fold_precision = precision_score(y_fold_val, y_pred)
-            fold_recall = recall_score(y_fold_val, y_pred)
-            fold_f1 = f1_score(y_fold_val, y_pred)
+            # 修复：添加zero_division参数以处理无预测样本的情况
+            fold_precision = precision_score(y_fold_val, y_pred, zero_division=0)
+            fold_recall = recall_score(y_fold_val, y_pred, zero_division=0)
+            fold_f1 = f1_score(y_fold_val, y_pred, zero_division=0)
             
             # 存储指标
             fold_metrics["precision"].append(fold_precision)
@@ -273,24 +274,22 @@ class ModelTrainer:
         model: BaseModel,
         model_type: str,
         metrics: Dict[str, float],
-        output_dir: str
+        output_dir: Optional[str] = None
     ) -> str:
-        """
-        保存训练好的模型
+        """保存训练好的模型"""
+        output_dir = output_dir or self.config.get("model.models_dir", "models")
+        os.makedirs(output_dir, exist_ok=True)
         
-        参数:
-            model: 训练好的模型
-            model_type: 模型类型
-            metrics: 模型评估指标
-            output_dir: 输出目录
-            
-        返回:
-            模型保存路径
-        """
         # 生成模型文件名（包含时间戳和F1分数）
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         f1_score_str = f"{metrics['f1']:.4f}".replace(".", "_")
-        model_filename = f"{model_type}_{timestamp}_f1_{f1_score_str}.pkl"
+        
+        # 修复：根据不同模型类型使用正确的文件扩展名
+        if model_type in ["mlp", "lstm"]:
+            model_filename = f"{model_type}_{timestamp}_f1_{f1_score_str}.keras"
+        else:
+            model_filename = f"{model_type}_{timestamp}_f1_{f1_score_str}.pkl"
+            
         model_path = os.path.join(output_dir, model_filename)
         
         # 保存模型

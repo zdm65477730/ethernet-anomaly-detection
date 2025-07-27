@@ -507,10 +507,10 @@ class AutoMLTrainer:
         # 简化起见，我们只在特定条件下切换模型类型
         current_f1 = metrics.get("f1", 0)
         
-        # 如果性能不佳且不是LSTM，尝试切换到LSTM
-        if current_f1 < 0.7 and current_model_type != "lstm" and iteration <= 3:
-            self.logger.info("性能不佳，尝试切换到LSTM模型")
-            return "lstm"
+        # 如果性能不佳且不是XGBoost，尝试切换到XGBoost（避免LSTM问题）
+        if current_f1 < 0.7 and current_model_type != "xgboost" and iteration <= 3:
+            self.logger.info("性能不佳，尝试切换到XGBoost模型")
+            return "xgboost"
         
         # 保持当前模型类型
         return current_model_type
@@ -518,7 +518,19 @@ class AutoMLTrainer:
     def _save_best_model(self, model, model_type: str, metrics: Dict[str, float], iteration: int):
         """保存最佳模型"""
         try:
-            model_path = self.model_factory.save_model(model, model_type)
+            # 从metrics中获取F1分数，生成包含模型类型、迭代次数和F1分数的文件名
+            f1_score = metrics.get("f1", 0)
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            
+            # 创建保存目录如果不存在
+            os.makedirs(self.model_factory.models_dir, exist_ok=True)
+            
+            # 生成带信息的文件名
+            filename = f"{model_type}_iter_{iteration}_{timestamp}_f1_{f1_score:.4f}.pkl"
+            model_path = os.path.join(self.model_factory.models_dir, filename)
+            
+            # 保存模型
+            self.model_factory.save_model(model, model_path)
             self.logger.info(f"保存第 {iteration} 轮的最佳 {model_type} 模型到: {model_path}")
         except Exception as e:
             self.logger.error(f"保存最佳模型时出错: {str(e)}")

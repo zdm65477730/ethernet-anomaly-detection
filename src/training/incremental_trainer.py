@@ -98,13 +98,15 @@ class IncrementalTrainer:
                 return model, metrics, False
         
         # 检查模型是否支持增量训练
-        if not hasattr(model, "partial_fit") and not hasattr(model, "train_on_batch"):
+        # 修复：添加对特定模型类型的判断，对于不支持增量训练的模型直接进行全量重训
+        unsupported_models = ["xgboost", "random_forest"]
+        if model_type in unsupported_models or (not hasattr(model, "partial_fit") and not hasattr(model, "train_on_batch")):
             self.logger.warning(
                 f"{model_type} 不支持增量训练，将使用新数据全量重训"
             )
             from .model_trainer import ModelTrainer
             trainer = ModelTrainer(self.model_factory, self.config, self.evaluator)
-            model, metrics, _ = trainer.train_new_model(model_type, X_np, y_np)
+            model, metrics, _ = trainer.train_new_model(model_type, X_np, y_np, protocol_labels)
             return model, metrics, True
         
         # 分割评估集（用于增量训练后的评估）
@@ -263,14 +265,12 @@ class IncrementalTrainer:
             return {"precision": 0, "recall": 0, "f1": 0}
             
         try:
-            metrics, _ = self.evaluator.evaluate_model(
+            # 修复：移除不支持的model_type参数
+            metrics = self.evaluator.evaluate_model(
                 model=model,
-                model_type=model_type,
                 X_test=X_eval,
                 y_test=y_eval,
-                protocol_labels=protocol_labels,
-                feature_names=feature_names,
-                output_path=None  # 增量评估不保存报告
+                feature_names=feature_names
             )
             return metrics
         except Exception as e:

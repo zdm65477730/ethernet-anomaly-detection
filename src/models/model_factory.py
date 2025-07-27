@@ -3,6 +3,8 @@ import re
 import time
 import pickle
 from typing import Dict, Optional, List
+from src.config.config_manager import ConfigManager
+from src.utils.logger import get_logger
 from .base_model import BaseModel
 from .traditional_models import (
     XGBoostModel,
@@ -10,33 +12,26 @@ from .traditional_models import (
     LogisticRegressionModel
 )
 from .deep_models import LSTMModel, MLPModel
-from src.config.config_manager import ConfigManager
-from src.utils.logger import get_logger
-from src.system.base_component import BaseComponent
+from .ensemble_model import EnsembleModel
 
-class ModelFactory(BaseComponent):
-    """模型工厂，统一管理模型的创建、训练、保存和加载"""
+class ModelFactory:
+    """模型工厂，用于创建各种类型的模型实例"""
+    
+    # 模型类型到类的映射
+    MODEL_CLASSES = {
+        "xgboost": XGBoostModel,
+        "random_forest": RandomForestModel,
+        "lstm": LSTMModel,
+        "mlp": MLPModel,
+        "ensemble": EnsembleModel  # 添加集成模型支持
+    }
     
     def __init__(self, config: Optional[ConfigManager] = None):
-        super().__init__()
+        """初始化模型工厂"""
         self.config = config or ConfigManager()
-        self.models_dir = self.config.get("model.models_dir", "models")
         self.logger = get_logger("model.factory")
-        
-        # 模型类型到类的映射
-        self._model_classes = {
-            "xgboost": XGBoostModel,
-            "random_forest": RandomForestModel,
-            "logistic_regression": LogisticRegressionModel,
-            "lstm": LSTMModel,
-            "mlp": MLPModel
-        }
-        
-        # 已加载的模型实例缓存
         self._model_cache: Dict[str, BaseModel] = {}
-        
-        # 确保模型目录存在
-        os.makedirs(self.models_dir, exist_ok=True)
+        self.models_dir = self.config.get("training.models_dir", "models")
     
     def get_status(self) -> Dict[str, any]:
         """
@@ -48,7 +43,7 @@ class ModelFactory(BaseComponent):
         status = super().get_status()
         status.update({
             "model_cache_size": len(self._model_cache),
-            "supported_models": list(self._model_classes.keys()),
+            "supported_models": list(self.MODEL_CLASSES.keys()),
             "models_dir": self.models_dir
         })
         return status
@@ -99,10 +94,10 @@ class ModelFactory(BaseComponent):
     
     def create_model(self, model_type: str, **kwargs) -> BaseModel:
         """创建指定类型的模型"""
-        if model_type not in self._model_classes:
+        if model_type not in self.MODEL_CLASSES:
             raise ValueError(f"不支持的模型类型: {model_type}")
             
-        model_class = self._model_classes[model_type]
+        model_class = self.MODEL_CLASSES[model_type]
         # 确保传递model_type参数
         kwargs["model_type"] = model_type
         return model_class(**kwargs)
@@ -157,10 +152,10 @@ class ModelFactory(BaseComponent):
             FileNotFoundError: 模型文件不存在
             ValueError: 不支持的模型类型
         """
-        if model_type not in self._model_classes:
+        if model_type not in self.MODEL_CLASSES:
             raise ValueError(f"不支持的模型类型: {model_type}")
         
-        model_class = self._model_classes[model_type]
+        model_class = self.MODEL_CLASSES[model_type]
         model = model_class.load(model_path)
         
         self.logger.info(f"已从 {model_path} 加载 {model_type} 模型")
@@ -196,7 +191,7 @@ class ModelFactory(BaseComponent):
         返回:
             最新模型文件路径，未找到则返回None
         """
-        if model_type not in self._model_classes:
+        if model_type not in self.MODEL_CLASSES:
             raise ValueError(f"不支持的模型类型: {model_type}")
         
         # 首先检查是否存在latest_model链接
@@ -244,10 +239,10 @@ class ModelFactory(BaseComponent):
         models = []
         
         # 确定要搜索的模型类型
-        model_types = [model_type] if model_type else list(self._model_classes.keys())
+        model_types = [model_type] if model_type else list(self.MODEL_CLASSES.keys())
         
         for mt in model_types:
-            if mt not in self._model_classes:
+            if mt not in self.MODEL_CLASSES:
                 continue
                 
             model_type_dir = os.path.join(self.models_dir, mt)
@@ -289,7 +284,7 @@ class ModelFactory(BaseComponent):
         返回:
             是否删除成功
         """
-        if model_type not in self._model_classes:
+        if model_type not in self.MODEL_CLASSES:
             raise ValueError(f"不支持的模型类型: {model_type}")
         
         model_filename = f"{model_type}_v{version}.pkl"
