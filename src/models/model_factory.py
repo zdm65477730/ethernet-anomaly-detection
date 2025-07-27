@@ -73,33 +73,39 @@ class ModelFactory(BaseComponent):
         super().stop()
         self.logger.info("模型工厂已停止")
     
-    def create_model(self, model_type: str, **kwargs) -> BaseModel:
+    def set_latest_model(self, model_type: str, model_path: str) -> None:
         """
-        创建指定类型的模型实例
+        设置最新模型路径
         
         参数:
-            model_type: 模型类型，支持：
-                       - xgboost: XGBoost模型
-                       - random_forest: 随机森林模型
-                       - logistic_regression: 逻辑回归模型
-                       - lstm: LSTM神经网络模型
-                       - mlp: 多层感知机模型
-            **kwargs: 模型参数
-            
-        返回:
-            创建的模型实例
-            
-        异常:
-            ValueError: 不支持的模型类型
+            model_type: 模型类型
+            model_path: 模型路径
         """
+        # 创建软链接或记录最新模型路径
+        latest_model_path = os.path.join(self.models_dir, model_type, "latest_model.pkl")
+        try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(latest_model_path), exist_ok=True)
+            
+            # 如果链接已存在，先删除
+            if os.path.exists(latest_model_path) or os.path.islink(latest_model_path):
+                os.remove(latest_model_path)
+            
+            # 创建新链接
+            os.symlink(os.path.abspath(model_path), latest_model_path)
+            self.logger.debug(f"已更新 {model_type} 类型的最新模型链接: {latest_model_path}")
+        except Exception as e:
+            self.logger.warning(f"无法创建最新模型链接 {latest_model_path}: {e}")
+    
+    def create_model(self, model_type: str, **kwargs) -> BaseModel:
+        """创建指定类型的模型"""
         if model_type not in self._model_classes:
             raise ValueError(f"不支持的模型类型: {model_type}")
-        
+            
         model_class = self._model_classes[model_type]
-        model = model_class(model_type=model_type, **kwargs)
-        
-        self.logger.info(f"已创建 {model_type} 模型实例")
-        return model
+        # 确保传递model_type参数
+        kwargs["model_type"] = model_type
+        return model_class(**kwargs)
     
     def save_model(self, model: BaseModel, model_path: str) -> bool:
         """
@@ -182,17 +188,30 @@ class ModelFactory(BaseComponent):
         if model_type not in self._model_classes:
             raise ValueError(f"不支持的模型类型: {model_type}")
         
-        # 查找模型目录中的所有模型文件
-        model_files = []
+        # 首先检查是否存在latest_model链接
         model_type_dir = os.path.join(self.models_dir, model_type)
+        latest_model_link = os.path.join(model_type_dir, "latest_model.pkl")
         
-        if not os.path.exists(model_type_dir):
-            return None
+        if os.path.exists(latest_model_link) or os.path.islink(latest_model_link):
+            try:
+                # 解析符号链接
+                resolved_path = os.path.realpath(latest_model_link)
+                if os.path.exists(resolved_path):
+                    return resolved_path
+            except Exception as e:
+                self.logger.warning(f"解析符号链接失败 {latest_model_link}: {e}")
         
-        for f in os.listdir(model_type_dir):
-            if f.endswith(".pkl") and f.startswith(f"{model_type}_"):
-                file_path = os.path.join(model_type_dir, f)
-                model_files.append((file_path, os.path.getmtime(file_path)))
+        # 如果没有符号链接或解析失败，查找最新的模型文件
+        model_files = []
+        # 也检查根models目录下的模型文件
+        for root_dir in [model_type_dir, self.models_dir]:
+            if not os.path.exists(root_dir):
+                continue
+                
+            for f in os.listdir(root_dir):
+                if f.endswith(".pkl") and f.startswith(f"{model_type}_"):
+                    file_path = os.path.join(root_dir, f)
+                    model_files.append((file_path, os.path.getmtime(file_path)))
         
         if not model_files:
             return None

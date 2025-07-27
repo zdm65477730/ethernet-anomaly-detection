@@ -8,6 +8,9 @@ network:
   # 默认BPF过滤规则（空表示捕获所有流量）
   filter: ""
   
+  # 离线pcap文件路径（如果指定，则处理离线文件而不是实时捕获）
+  offline_file: null
+  
   # 每秒最大抓包数（0表示无限制）
   capture_limit: 1000
 
@@ -41,6 +44,9 @@ data:
   
   # 反馈数据目录
   feedback_dir: "data/feedback"
+  
+  # 离线处理数据目录
+  offline_dir: "data/offline"
   
   # 最大保留天数
   retention_days: 30

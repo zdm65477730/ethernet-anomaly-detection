@@ -21,7 +21,7 @@ class ModelTrainer:
     ):
         self.model_factory = model_factory
         self.config = config or ConfigManager()
-        self.evaluator = evaluator or ModelEvaluator(config=self.config)
+        self.evaluator = evaluator or ModelEvaluator()
         self.logger = get_logger("training.trainer")
         
         # 训练配置
@@ -70,18 +70,32 @@ class ModelTrainer:
         train_params = train_params or {}
         output_dir = output_dir or self.default_train_params["models_dir"]
         
-        # 确保数据格式正确
+        # 确保数据格式正确，使用数据处理器进行预处理
         if isinstance(X, pd.DataFrame):
-            X_np = X.values
-            feature_names = X.columns.tolist()
+            # 使用数据处理器预处理特征
+            from src.data.data_processor import DataProcessor
+            processor = DataProcessor()
+            # 只使用模型兼容的特征
+            model_compatible_features, _ = processor.get_model_compatible_features()
+            available_features = [f for f in model_compatible_features if f in X.columns]
+            X_filtered = X[available_features]
+            X_processed = processor.preprocess_features(X_filtered, fit=True)
+            feature_names = None  # 预处理后特征名称会改变
         else:
-            X_np = X
+            X_processed = X
             feature_names = [f"feature_{i}" for i in range(X.shape[1])]
         
+        # 确保y是numpy数组
         if isinstance(y, pd.Series):
             y_np = y.values
         else:
             y_np = y
+            
+        # 确保X是numpy数组
+        if isinstance(X_processed, pd.DataFrame):
+            X_np = X_processed.values
+        else:
+            X_np = X_processed
         
         # 分割训练集和测试集
         X_train, X_test, y_train, y_test = train_test_split(
@@ -122,14 +136,13 @@ class ModelTrainer:
                 stratify=y_np
             )
         
-        test_metrics, report_path = self.evaluator.evaluate_model(
+        test_metrics = self.evaluator.evaluate_model(
             model=model,
-            model_type=model_type,
             X_test=X_test,
             y_test=y_test,
-            protocol_labels=test_protocol_labels,
             feature_names=feature_names
         )
+        report_path = None  # 临时设置为None，实际应该由evaluate_model返回
         
         # 保存模型
         model_path = self._save_trained_model(
@@ -196,9 +209,11 @@ class ModelTrainer:
         for fold, (train_idx, val_idx) in enumerate(cv.split(X, y)):
             fold_start = time.time()
             
-            # 分割数据
-            X_fold_train, X_fold_val = X[train_idx], X[val_idx]
-            y_fold_train, y_fold_val = y[train_idx], y[val_idx]
+            # 分割数据 - 确保使用正确的索引方式
+            X_fold_train = X[train_idx]
+            X_fold_val = X[val_idx]
+            y_fold_train = y[train_idx]
+            y_fold_val = y[val_idx]
             
             # 创建并训练模型
             model = self.model_factory.create_model(model_type,** train_params)
@@ -286,6 +301,53 @@ class ModelTrainer:
         
         self.logger.info(f"模型已保存至: {model_path}")
         return model_path
+    
+    def evaluate_model(
+        self,
+        model,
+        model_type: str,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        output_path: Optional[str] = None
+    ) -> Tuple[Dict, str]:
+        """
+        评估模型性能
+        
+        参数:
+            model: 训练好的模型
+            model_type: 模型类型
+            X_test: 测试特征数据
+            y_test: 测试标签数据
+            output_path: 评估报告输出路径
+            
+        返回:
+            (评估指标字典, 报告文件路径)
+        """
+        # 使用ModelEvaluator进行评估
+        metrics = self.evaluator.evaluate_model(
+            model=model,
+            X_test=X_test,
+            y_test=y_test
+        )
+        
+        # 生成报告文件名
+        if output_path is None:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            output_path = os.path.join(
+                self.config.get("training.reports_dir", "reports"),
+                f"{model_type}_evaluation_{timestamp}.json"
+            )
+        
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # 保存评估报告
+        import json
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+        
+        self.logger.info(f"模型评估完成，报告已保存至: {output_path}")
+        return metrics, output_path
     
     def train_protocol_specific_models(
         self,

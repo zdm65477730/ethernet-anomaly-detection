@@ -189,6 +189,35 @@ class DataStorage:
             self.logger.error(f"从 {path} 读取数据失败: {str(e)}", exc_info=True)
             return pd.DataFrame()
     
+    def count_new_data_since(self, timestamp: float, protocol: Optional[int] = None) -> int:
+        """
+        统计指定时间戳之后的新数据数量
+        
+        Args:
+            timestamp: 时间戳阈值
+            protocol: 协议类型（可选）
+            
+        Returns:
+            新数据的数量
+        """
+        try:
+            # 加载处理后的数据（在实际应用中可能需要优化）
+            data = self.load_processed_data_in_range(
+                start_time=timestamp,
+                end_time=time.time()
+            )
+            
+            # 如果指定了协议，进行过滤
+            if protocol is not None:
+                # 假设数据中有一个protocol列
+                if 'protocol' in data.columns:
+                    data = data[data['protocol'] == protocol]
+            
+            return len(data)
+        except Exception as e:
+            self.logger.warning(f"统计新数据数量时出错: {e}")
+            return 0
+    
     def get_files_in_range(self, base_dir: str, start_time: float, end_time: float) -> List[str]:
         """
         获取指定时间范围内的文件

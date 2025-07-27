@@ -1,31 +1,83 @@
 import os
 import typer
 import yaml
-from typing import Optional
-from src.cli.utils import (
-    print_success,
-    print_error,
-    print_warning,
-    print_info,
-    confirm,
-    create_directories,
-    get_available_interfaces
-)
+import socket
+import fcntl
+import struct
+from typing import List, Tuple
+from src.data.data_generator import DataGenerator
+from src.cli.utils import print_success, print_error, print_info, print_warning, confirm
 from src.config.config_manager import ConfigManager
 
-# 初始化所需的目录结构
-REQUIRED_DIRECTORIES = [
-    "config",
-    "data/raw",
-    "data/processed",
-    "data/test",
-    "logs",
-    "models/xgboost",
-    "models/random_forest",
-    "models/lstm",
-    "reports/evaluation/figures",
-    "reports/anomalies"
-]
+def get_available_interfaces() -> List[str]:
+    """
+    获取系统可用的网络接口列表
+    
+    Returns:
+        List[str]: 可用网络接口名称列表
+    """
+    interfaces = []
+    
+    # 获取网络接口信息的常量
+    SIOCGIFCONF = 0x8912  # 获取接口配置
+    SIZE_OF_IFREQ = 40    # ifreq结构体大小
+    
+    # 创建socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    try:
+        # 获取接口数量
+        buf_size = 20 * SIZE_OF_IFREQ  # 20个接口的缓冲区
+        ifconf = fcntl.ioctl(sock.fileno(), SIOCGIFCONF, bytes(buf_size))
+        
+        # 解析返回结果
+        _, interfaces_bytes = ifconf[:4], ifconf[4:]
+        
+        # 提取接口名称
+        for i in range(0, len(interfaces_bytes), SIZE_OF_IFREQ):
+            interface_name = interfaces_bytes[i:i+16].decode('utf-8').strip('\x00')
+            if interface_name:  # 忽略空名称
+                interfaces.append(interface_name)
+                
+    except Exception as e:
+        print_error(f"获取网络接口时出错: {str(e)}")
+    finally:
+        sock.close()
+    
+    return interfaces
+
+def create_directories(dirs: List[str], overwrite: bool = False) -> Tuple[bool, List[str]]:
+    """
+    创建所需的目录结构
+    
+    Args:
+        dirs: 要创建的目录列表
+        overwrite: 如果为True，则覆盖已存在的目录
+        
+    Returns:
+        Tuple[bool, List[str]]: (是否成功, 失败的目录列表)
+    """
+    failed_dirs = []
+    
+    for dir_path in dirs:
+        try:
+            # 如果目录已存在且不强制覆盖，则跳过
+            if os.path.exists(dir_path) and not overwrite:
+                continue
+                
+            # 创建目录及其父目录
+            os.makedirs(dir_path, exist_ok=True)
+            
+        except Exception as e:
+            print_error(f"无法创建目录 {dir_path}: {str(e)}")
+            failed_dirs.append(dir_path)
+    
+    # 返回成功状态和失败列表
+    return len(failed_dirs) == 0, failed_dirs
+
+app = typer.Typer(help="系统初始化命令")
+
+# 没有需要修改的内容
 
 # 默认配置模板
 DEFAULT_CONFIG = {
@@ -122,52 +174,107 @@ DETECTION_RULES = {
     }
 }
 
+@app.command()
 def main(
-    force: bool = typer.Option(
-        False, "--force", "-f",
-        help="强制覆盖现有配置和目录"
-    ),
     config_dir: str = typer.Option(
         "config", "--config-dir", "-c",
         help="配置文件目录"
     ),
     data_dir: str = typer.Option(
-        "data", "--data-dir", "-d",
-        help="数据存储目录"
+        ".", "--data-dir", "-d",
+        help="数据目录"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="强制覆盖已存在的配置文件"
+    ),
+    generate_data: bool = typer.Option(
+        False, "--generate-data", "-g",
+        help="生成示例数据"
+    ),
+    samples: int = typer.Option(
+        1000, "--samples", "-s",
+        help="生成的样本数量"
     )
 ):
-    """初始化系统配置和目录结构"""
-    print_info("开始初始化异常检测系统...")
+    """
+    初始化系统配置和目录结构
+    """
+    print_info("正在初始化异常检测系统...")
     
-    # 确认是否覆盖现有文件
-    if not force:
-        existing_config = os.path.exists(os.path.join(config_dir, "config.yaml"))
-        existing_data = os.path.exists(data_dir)
+    try:
+        # 创建必要的目录
+        dirs_to_create = [
+            config_dir,
+            "data/raw",
+            "data/processed",
+            "data/test",
+            "models",
+            "logs",
+            "reports/evaluations",
+            "reports/detections"
+        ]
         
-        if existing_config or existing_data:
-            if not confirm(
-                f"检测到现有配置或数据目录，{'将被覆盖' if force else '是否继续?'}"
-            ):
-                print_info("初始化已取消")
-                raise typer.Exit(code=0)
-    
-    # 创建所需目录
-    dirs_to_create = [
-        os.path.join(config_dir),
-        os.path.join(data_dir, "raw"),
-        os.path.join(data_dir, "processed"),
-        os.path.join(data_dir, "test"),
-        "logs",
-        "models/xgboost",
-        "models/random_forest",
-        "models/lstm",
-        "reports/evaluation/figures",
-        "reports/anomalies"
-    ]
-    
-    success, failed = create_directories(dirs_to_create, overwrite=force)
-    if not success:
-        print_error(f"初始化失败，以下目录创建失败: {', '.join(failed)}")
+        success, failed = create_directories(dirs_to_create, overwrite=force)
+        if not success:
+            print_error(f"创建目录失败: {', '.join(failed)}")
+            raise typer.Exit(code=1)
+        
+        # 创建默认配置文件
+        config_file = f"{config_dir}/config.yaml"
+        if not force and ConfigManager.config_file_exists(config_dir):
+            if not confirm("配置文件已存在，是否覆盖?"):
+                print_info("跳过配置文件创建")
+            else:
+                ConfigManager.create_default_config(config_dir)
+                print_success(f"已创建配置文件: {config_file}")
+        else:
+            ConfigManager.create_default_config(config_dir)
+            print_success(f"已创建配置文件: {config_file}")
+        
+        # 获取可用网络接口
+        interfaces = get_available_interfaces()
+        if interfaces:
+            print_info("可用网络接口:")
+            for interface in interfaces:
+                print(f"  - {interface}")
+        else:
+            print_warning("未找到可用网络接口")
+        
+        # 生成示例数据（如果需要）
+        if generate_data:
+            print_info(f"正在生成 {samples} 个示例数据样本...")
+            try:
+                generator = DataGenerator()
+                result = generator.generate(
+                    num_samples=samples,
+                    output_dir="data/processed"
+                )
+                print_success("示例数据生成完成!")
+                
+                # 同时将测试数据复制到data/test目录以支持模型评估
+                import shutil
+                import pandas as pd
+                if "test_path" in result:
+                    # 如果生成时已经分割了训练集和测试集
+                    shutil.copy2(result["test_path"], "data/test/test_data.csv")
+                    print_success("测试数据已复制到 data/test 目录!")
+                else:
+                    # 如果没有分割，则从完整数据集中复制一部分作为测试数据
+                    full_data_path = result.get("full_path", "data/processed/full_data.csv")
+                    df = pd.read_csv(full_data_path)
+                    # 取20%作为测试数据
+                    test_df = df.sample(frac=0.2, random_state=42)
+                    test_df.to_csv("data/test/test_data.csv", index=False)
+                    print_success("测试数据已生成并保存到 data/test 目录!")
+                    
+            except Exception as e:
+                print_error(f"生成示例数据时出错: {str(e)}")
+        
+        print_success("系统初始化完成!")
+        
+    except Exception as e:
+        print_error(f"初始化系统时发生错误: {str(e)}")
         raise typer.Exit(code=1)
     
     # 获取可用网络接口

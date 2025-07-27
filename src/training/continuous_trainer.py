@@ -31,7 +31,7 @@ class ContinuousTrainer:
         self.model_selector = model_selector or ModelSelector(config=self.config)
         
         # 初始化训练器组件
-        self.evaluator = ModelEvaluator(config=self.config)
+        self.evaluator = ModelEvaluator()
         self.feedback_optimizer = FeedbackOptimizer(config=self.config)
         self.base_trainer = ModelTrainer(
             model_factory=self.model_factory,
@@ -115,14 +115,15 @@ class ContinuousTrainer:
             
         self._is_running = False
         
-        # 等待线程结束
+        # 中断可能正在等待的线程
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=10)
+            # 通过设置一个较短的等待时间来快速终止线程
+            self._thread.join(timeout=5)
             if self._thread.is_alive():
                 self.logger.warning("持续训练线程未能正常终止")
         
         self.logger.info("持续训练已停止")
-    
+
     def _continuous_training_loop(self) -> None:
         """持续训练主循环"""
         self.logger.info("持续训练循环开始")
@@ -138,19 +139,21 @@ class ContinuousTrainer:
                 
                 # 等待一段时间或直到被唤醒
                 sleep_time = max(1, self.continuous_config["check_interval"] - (time.time() - current_time))
+                # 分段睡眠，以便更快响应停止信号
                 for _ in range(int(sleep_time)):
                     if not self._is_running:
-                        break
+                        return  # 直接返回，而不是break
                     time.sleep(1)
                 
         except Exception as e:
             self.logger.error(f"持续训练循环出错: {str(e)}", exc_info=True)
-            # 尝试恢复
+            # 只有在仍在运行时才尝试恢复
             if self._is_running:
                 self.logger.info("尝试恢复持续训练循环...")
                 time.sleep(60)  # 等待一分钟再重试
-                self._continuous_training_loop()
-    
+                if self._is_running:  # 再次检查是否仍在运行
+                    self._continuous_training_loop()
+
     def _check_and_train(self) -> None:
         """检查新数据并执行训练"""
         self.logger.info("开始检查新数据并训练模型")

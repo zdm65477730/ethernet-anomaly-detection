@@ -1,6 +1,7 @@
 import os
 import typer
 import json
+import psutil
 from typing import Optional
 from src.cli.utils import (
     print_success,
@@ -25,6 +26,53 @@ def format_status(status: dict, indent: int = 0) -> str:
     
     return "\n".join(result)
 
+def _check_process_status(pid_file: str, process_name: str) -> bool:
+    """检查指定PID文件的进程状态"""
+    if not os.path.exists(pid_file):
+        print_info(f"{process_name}未运行 (PID文件不存在)")
+        return False
+        
+    # 读取PID
+    try:
+        with open(pid_file, "r") as f:
+            pid = int(f.read().strip())
+    except (ValueError, IOError) as e:
+        print_warning(f"读取{process_name} PID文件失败: {e}")
+        return False
+        
+    # 检查进程是否存在
+    try:
+        # 使用psutil检查进程，它可以更好地处理权限问题
+        process = psutil.Process(pid)
+        if process.is_running():
+            print_success(f"{process_name}正在运行 (PID: {pid})")
+            return True
+        else:
+            print_info(f"{process_name}未运行 (进程 {pid} 不存在)")
+            # 删除无效的PID文件
+            try:
+                os.remove(pid_file)
+            except:
+                pass
+            return False
+    except psutil.NoSuchProcess:
+        print_info(f"{process_name}未运行 (进程 {pid} 不存在)")
+        # 删除无效的PID文件
+        try:
+            os.remove(pid_file)
+        except:
+            pass
+        return False
+    except psutil.AccessDenied:
+        # 权限不足，但进程存在
+        print_success(f"{process_name}正在运行 (PID: {pid})，但无权限访问进程详情")
+        return True
+    except Exception as e:
+        print_warning(f"检查{process_name}进程状态时出错: {e}")
+        return False
+
+status_app = typer.Typer(help="查看系统状态")
+
 def main(
     pid_file: Optional[str] = typer.Option(
         None, "--pid-file", "-p",
@@ -34,70 +82,47 @@ def main(
         "config", "--config-dir", "-c",
         help="配置文件目录"
     ),
-    format: str = typer.Option(
-        "text", "--format", "-f",
-        help="输出格式 (text, json)"
+    detail: bool = typer.Option(
+        False, "--detail", "-d",
+        help="显示详细信息"
     )
 ):
-    """查询异常检测系统运行状态"""
-    # 确定PID文件路径
-    if pid_file is None:
+    """
+    查看系统运行状态
+    """
+    try:
+        # 检查主系统进程
+        main_pid_file = pid_file or "anomaly_detector.pid"
+        main_running = _check_process_status(main_pid_file, "主系统")
+        
+        # 检查持续训练进程
+        continuous_pid_file = "continuous_training.pid"
+        continuous_running = _check_process_status(continuous_pid_file, "持续训练")
+        
+        # 如果没有任何进程在运行，直接返回
+        if not main_running and not continuous_running:
+            return
+            
+        # 加载配置
         try:
             config = ConfigManager(config_dir=config_dir)
-            pid_file = config.get("system.pid_file", "anomaly_detector.pid")
-        except Exception:
-            pid_file = "anomaly_detector.pid"
-    
-    # 检查系统是否在运行
-    running = False
-    pid = None
-    
-    if os.path.exists(pid_file):
-        try:
-            with open(pid_file, "r") as f:
-                pid = int(f.read().strip())
+        except Exception as e:
+            print_warning(f"加载配置失败: {e}")
+            config = None
             
-            # 检查进程是否存在
-            os.kill(pid, 0)
-            running = True
-        except (ValueError, OSError):
-            # PID文件无效或进程不存在
-            pass
-    
-    if not running:
-        if format == "json":
-            print(json.dumps({"status": "stopped"}, indent=2))
-        else:
-            print_warning("异常检测系统当前未运行")
-        raise typer.Exit(code=0 if not running else 1)
-    
-    # 如果系统运行中，获取详细状态
-    try:
-        system_manager = SystemManager()
-        status = system_manager.get_status()
-        
-        # 添加基本信息
-        status["system"] = {
-            "status": "running",
-            "pid": pid
-        }
-        
-        if format == "json":
-            print(json.dumps(status, indent=2))
-        else:
-            print_success("异常检测系统正在运行中")
-            print(format_status(status))
-            
+        # 显示详细信息
+        if detail and config:
+            try:
+                system_manager = SystemManager(config=config)
+                status = system_manager.get_system_status()
+                print_info("系统详细状态:")
+                print(format_status(status))
+            except Exception as e:
+                print_warning(f"获取系统详细状态失败: {e}")
+                
     except Exception as e:
-        if format == "json":
-            print(json.dumps({
-                "status": "running",
-                "pid": pid,
-                "error": f"无法获取详细状态: {str(e)}"
-            }, indent=2))
-        else:
-            print_success(f"异常检测系统正在运行中 (PID: {pid})")
-            print_warning(f"无法获取详细状态: {str(e)}")
+        print_error(f"检查系统状态时发生错误: {str(e)}")
+        raise typer.Exit(code=1)
 
 if __name__ == "__main__":
-    typer.run(main)
+    status_app()

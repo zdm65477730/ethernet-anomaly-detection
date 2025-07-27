@@ -20,7 +20,7 @@ class IncrementalTrainer:
     ):
         self.model_factory = model_factory
         self.config = config or ConfigManager()
-        self.evaluator = evaluator or ModelEvaluator(config=self.config)
+        self.evaluator = evaluator or ModelEvaluator()
         self.logger = get_logger("training.incremental")
         
         # 增量训练配置

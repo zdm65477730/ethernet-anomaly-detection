@@ -11,6 +11,57 @@ DEFAULT_LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..
 # 存储已初始化的记录器名称
 _initialized_loggers = set()
 
+
+def setup_logging(
+    log_dir: str = DEFAULT_LOG_DIR,
+    log_level: int = logging.INFO,
+    max_bytes: int = 10*1024*1024,  # 10MB
+    backup_count: int = 5
+) -> None:
+    """
+    设置日志系统
+    
+    Args:
+        log_dir: 日志文件目录
+        log_level: 日志级别
+        max_bytes: 单个日志文件最大字节数
+        backup_count: 保留的备份日志文件数量
+    """
+    # 确保日志目录存在
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 配置根记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # 如果已经配置过，则直接返回
+    if root_logger.handlers:
+        return
+    
+    # 创建格式化器
+    formatter = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
+    
+    # 文件处理器（带轮转）
+    log_file = os.path.join(log_dir, "anomaly_detector.log")
+    file_handler = RotatingFileHandler(
+        log_file, 
+        maxBytes=max_bytes, 
+        backupCount=backup_count,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(formatter)
+    
+    # 控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(formatter)
+    
+    # 添加处理器到根记录器
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+
 def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """获取指定名称的日志器"""
     logger = logging.getLogger(name)

@@ -1,447 +1,329 @@
-# 异常检测系统用户指南
+# 以太网异常检测系统用户指南
 
-## 1. 系统概述
+本文档详细介绍了以太网异常检测系统的使用方法，包括完整的操作流程和命令示例。
 
-异常检测系统是一款基于机器学习的网络安全防护工具，能够实时监控网络流量、识别异常行为并自动触发告警。系统融合了传统机器学习与深度学习技术，可适应企业内网、数据中心等多种网络环境。
+## 目录
 
-### 1.1 功能特点
+1. [系统概述](#系统概述)
+2. [环境准备](#环境准备)
+3. [系统使用](#系统使用)
+   - [初始化](#初始化)
+   - [实时流量检测](#实时流量检测)
+   - [离线pcap文件分析](#离线pcap文件分析)
+   - [系统状态监控](#系统状态监控)
+4. [模型训练与优化](#模型训练与优化)
+   - [数据生成](#数据生成)
+   - [模型训练](#模型训练)
+   - [模型评估](#模型评估)
+   - [模型优化](#模型优化)
+   - [持续训练](#持续训练)
+5. [检测报告](#检测报告)
+6. [反馈处理](#反馈处理)
 
-- 实时流量分析（毫秒级处理网络数据包）
-- 自适应学习（动态优化检测模型）
-- 多维度检测（结合模型预测与规则引擎）
-- 灵活部署（支持单机与分布式架构）
+## 系统概述
 
-### 1.2 系统架构
+以太网异常检测系统是一个基于机器学习的网络流量分析工具，能够实时检测网络中的异常行为。系统支持两种工作模式：
 
-系统采用分层设计，主要包含以下模块：
-1. **数据采集层**：捕获并解析网络数据包
-2. **特征提取层**：从流量中提取有价值的特征
-3. **模型层**：多种机器学习模型用于异常检测
-4. **检测层**：结合模型预测与规则引擎判断异常
-5. **应用层**：提供CLI接口和监控面板
+1. **实时流量检测** - 监听网络接口并实时分析流量
+2. **离线文件分析** - 分析预先捕获的pcap文件
 
-## 2. 环境准备与安装
+系统采用模块化设计，包含数据捕获、特征提取、异常检测、模型训练等多个组件。
 
-### 2.1 系统要求
+## 环境准备
 
-- 操作系统：Linux (Ubuntu 20.04+/CentOS 8+)
-- Python：3.8 或更高版本
-- 内存：至少4GB可用内存
-- 存储：至少10GB可用磁盘空间
+### 系统要求
 
-### 2.2 安装步骤
+- Python 3.8+
+- Linux系统（推荐Ubuntu 20.04+）
+- 网络接口访问权限
 
-#### 方法一：快速安装（推荐）
-```bash
-# 克隆仓库
-git clone https://github.com/zdm65477730/ethernet-anomaly-detection.git
+### 安装依赖
+
+```
+# 克隆项目
+git clone https://github.com/zdm65477730/ethernet-anomaly-detection
 cd ethernet-anomaly-detection
 
-# 使用辅助脚本安装依赖
-chmod +x scripts/install_dependencies.sh
-sudo ./scripts/install_dependencies.sh
-
-# 以开发模式安装
-pip install -e .
-```
-
-#### 方法二：手动安装
-```bash
 # 创建虚拟环境
 python -m venv venv
 source venv/bin/activate
 
-# 安装生产依赖
+# 安装依赖
 pip install -r requirements.txt
-
-# 安装开发依赖（可选）
-pip install -r requirements_dev.txt
-
-# 安装项目
-pip install -e .
 ```
 
-### 2.3 初始化系统
+## 系统使用
 
-安装完成后，需要初始化系统配置和目录结构：
+### 初始化
+
+首次使用系统前需要进行初始化：
+
 ```bash
+# 初始化系统目录和配置
 anomaly-detector init
 ```
 
-此命令将创建以下目录结构：
-```
-.
-├── config/          # 配置文件目录
-├── data/            # 数据存储目录
-│   ├── raw/         # 原始流量数据
-│   ├── processed/   # 处理后的特征数据
-│   └── test/        # 测试数据
-├── logs/            # 日志文件目录
-├── models/          # 模型文件目录
-├── reports/         # 报告文件目录
-└── alerts/          # 告警记录目录
-```
+### 实时流量检测
 
-## 3. 系统使用指南
+系统支持实时监听网络接口并检测异常流量：
 
-### 3.1 启动系统
-
-#### 基本启动
 ```bash
+# 启动系统（监听所有接口）
 anomaly-detector start
+
+# 启动系统并指定网络接口
+anomaly-detector start --interface eth0
+
+# 启动系统并指定BPF过滤规则
+anomaly-detector start --interface eth0 --filter "tcp port 80"
 ```
 
-#### 指定网络接口
+### 离线pcap文件分析
+
+系统可以分析预先捕获的pcap文件：
+
 ```bash
-# 监听特定网络接口（如eth1）
-anomaly-detector start --interface eth1
+# 分析pcap文件
+anomaly-detector start --pcap-file /path/to/file.pcap
 ```
 
-#### 启用详细日志模式
+### 系统状态监控
+
+查看系统运行状态：
+
 ```bash
-anomaly-detector start --verbose
-```
-
-#### 使用自定义过滤规则（仅监控HTTP/HTTPS流量）
-```bash
-anomaly-detector start --filter "tcp port 80 or tcp port 443"
-```
-
-系统启动成功后，会在后台运行并输出以下信息：
-```
-[INFO] 系统启动成功，进程ID: 12345
-[INFO] 监听接口: eth0
-[INFO] 加载模型: xgboost (v20230615)
-[INFO] 状态监控地址: http://localhost:8080/status
-```
-
-### 3.2 查看系统状态
-
-#### 查看基本状态
-```bash
+# 查看系统状态
 anomaly-detector status
 ```
 
-#### 查看详细统计信息
+## 模型训练与优化
+
+### 数据生成
+
+生成模拟训练数据用于模型训练：
+
 ```bash
-anomaly-detector status --detail
+# 生成测试数据
+anomaly-detector generate-test-data
+
+# 生成指定数量的测试数据
+anomaly-detector generate-test-data --count 5000
 ```
 
-#### 查看实时流量指标
+### 模型训练
+
+系统支持多种模型训练方式：
+
 ```bash
-anomaly-detector metrics
-```
-
-状态信息示例：
-```
-系统状态: 运行中 (已运行 2小时15分)
-组件状态:
-  - 数据包捕获: 正常 (速率: 124 包/秒)
-  - 特征提取: 正常 (延迟: 8ms)
-  - 异常检测: 正常 (准确率: 98.2%)
-  - 告警系统: 正常 (今日告警: 3 条)
-资源使用:
-  - CPU: 15.3%
-  - 内存: 2.4GB
-  - 磁盘: 12.7GB (数据)
-```
-
-### 3.3 停止系统
-
-#### 正常停止（优雅关闭）
-```bash
-anomaly-detector stop
-```
-
-#### 强制停止（用于无响应情况）
-```bash
-anomaly-detector stop --force
-```
-
-### 3.4 模型管理
-
-#### 查看模型列表
-```bash
-anomaly-detector models list
-```
-
-#### 手动触发模型训练
-```bash
-# 训练通用模型（使用所有协议数据）
+# 单次训练
 anomaly-detector train once
 
-# 针对特定协议训练（如TCP协议，编号6）
-anomaly-detector train once --protocol 6
+# 指定模型类型和数据进行训练
+anomaly-detector train once --model xgboost --data data/processed/model_features_data.csv
 
-# 训练指定类型模型
-anomaly-detector train once --model lstm
-
-# 全量重训（使用历史所有数据）
-anomaly-detector train once --full-retrain
+# 自动优化训练后的模型
+anomaly-detector train once --auto-optimize
 ```
 
-#### 持续训练模式
+### 模型评估
+
+评估训练好的模型性能：
+
 ```bash
-# 启动持续训练模式
+# 评估模型
+anomaly-detector train evaluate
+
+# 指定模型类型进行评估
+anomaly-detector train evaluate --model xgboost
+```
+
+### 模型优化
+
+基于评估结果优化模型和特征工程：
+
+```bash
+# 基于最新评估报告进行优化
+anomaly-detector train optimize --report reports/xgboost_evaluation_20250727_122142.json
+
+# 基于反馈数据进行优化
+anomaly-detector train optimize --feedback-based
+```
+
+### 持续训练
+
+启动持续训练模式，系统会自动监测新数据并更新模型：
+
+```bash
+# 启动持续训练
 anomaly-detector train continuous
 
-# 查看持续训练帮助
-anomaly-detector train continuous --help
+# 后台运行持续训练
+anomaly-detector train continuous --background
 ```
 
-#### 模型评估
+### AutoML训练
+
+启动自动化机器学习训练，实现完整的训练-评估-优化-再训练闭环：
+
 ```bash
-# 评估现有模型
-anomaly-detector train evaluate
+# 启动AutoML训练
+anomaly-detector train automl
 
-# 查看评估帮助
-anomaly-detector train evaluate --help
+# 指定数据路径和模型类型
+anomaly-detector train automl --data data/processed/ --model xgboost
 ```
 
-#### 切换模型版本
+## 检测报告
+
+系统可以生成检测报告和模型评估报告：
+
 ```bash
-# 查看可用版本
-anomaly-detector models list --type xgboost
+# 生成最近24小时的检测报告
+anomaly-detector report generate --last-hours 24
 
-# 切换到指定版本
-anomaly-detector models use --type xgboost --version 20230615_1230
+# 生成指定时间范围的检测报告
+anomaly-detector report generate --start-time "2025-07-26 00:00:00" --end-time "2025-07-26 23:59:59"
+
+# 生成评估报告
+anomaly-detector report generate --type evaluation --last-hours 24
+
+# 生成HTML格式的可视化报告
+anomaly-detector report generate --last-hours 24 --format html --visualize
 ```
 
-### 3.5 日志管理
+### 基于离线数据的检测和报告生成
 
-#### 查看实时日志
+系统支持对离线pcap文件进行分析并生成图形化检测报告：
+
 ```bash
-# 查看系统主日志
-tail -f logs/system.log
+# 1. 使用系统分析离线pcap文件
+anomaly-detector start --pcap-file /path/to/network_traffic.pcap
 
-# 查看检测日志
-tail -f logs/detection.log
+# 2. 等待分析完成（系统会自动停止）
 
-# 查看告警日志
-tail -f logs/alerts.log
+# 3. 生成图形化检测报告
+anomaly-detector report generate --last-hours 24 --format html --visualize
+
+# 或者生成特定时间范围的报告
+anomaly-detector report generate --start-time "2025-07-27 09:00:00" --end-time "2025-07-27 17:00:00" --format html --visualize
 ```
 
-#### 日志轮转
-系统默认每天轮转日志文件，保留最近30天的日志。可以通过修改配置文件调整轮转策略。
+### 基于实时网络数据的检测和报告生成
 
-### 3.6 告警处理
+系统也支持实时网络流量检测并生成图形化报告：
 
-#### 查看历史告警
 ```bash
-anomaly-detector alerts list
+# 1. 启动实时流量检测
+anomaly-detector start --interface eth0
+
+# 2. 让系统运行一段时间以收集数据（例如几小时或一天）
+
+# 3. 停止系统
+anomaly-detector stop
+
+# 4. 生成图形化检测报告
+anomaly-detector report generate --last-hours 24 --format html --visualize
 ```
 
-#### 查看特定时间段告警
+### 图形化报告示例
+
+系统生成的HTML格式报告包含以下可视化内容：
+
+1. **检测概览仪表板** - 显示关键指标如总数据包数、会话数、检测到的异常数等
+2. **异常趋势图** - 显示随时间变化的异常检测情况
+3. **协议分布饼图** - 显示检测到的异常按协议类型的分布
+4. **IP地址热力图** - 显示异常活动最频繁的源/目标IP地址
+5. **混淆矩阵** - 对于评估报告，显示模型的分类性能
+6. **特征重要性柱状图** - 显示各特征对模型预测的贡献度
+7. **性能指标雷达图** - 展示模型的各项性能指标
+
+这些图形化报告帮助安全分析师更直观地理解网络异常情况和模型性能。
+
+## 反馈处理
+
+系统支持收集用户对检测结果的反馈，用于优化模型和特征工程。反馈数据保存在 `data/feedback/` 目录中。
+
+### 提交反馈
+
+提交对检测结果的反馈：
+
 ```bash
-anomaly-detector alerts list --start-time "2023-06-01 00:00:00" --end-time "2023-06-02 00:00:00"
+# 标记检测结果为真实异常
+anomaly-detector feedback submit --detection-id ALERT_12345 --is-anomaly true --anomaly-type "DDoS"
+
+# 标记检测结果为误报
+anomaly-detector feedback submit --detection-id ALERT_12346 --is-anomaly false
 ```
 
-#### 导出告警报告
+### 查看反馈
+
+查看已提交的反馈数据：
+
 ```bash
-anomaly-detector alerts export --format json --output alerts_report.json
+# 查看最近的反馈
+anomaly-detector feedback list
+
+# 查看最近50条反馈
+anomaly-detector feedback list --limit 50
 ```
 
-#### 告警反馈
+### 清理反馈
+
+清理旧的反馈数据：
+
 ```bash
-# 标记告警为正确检测
-anomaly-detector alerts feedback --alert-id ALERT_12345 --correct
-
-# 标记告警为误报
-anomaly-detector alerts feedback --alert-id ALERT_12345 --incorrect
+# 清理30天前的反馈数据
+anomaly-detector feedback cleanup --days 30
 ```
 
-## 4. 配置管理
+### 完整的闭环优化流程示例
 
-### 4.1 配置文件结构
+以下是一个完整的闭环优化流程示例，展示如何通过反馈持续改进模型性能：
 
-系统配置文件位于`config/`目录，主要配置文件包括：
-- `config.yaml`：主配置文件（网络、告警等）
-- `model_config.yaml`：模型参数配置
-- `detection_rules.yaml`：规则引擎配置
-
-### 4.2 查看当前配置
+**第一次闭环优化：**
 ```bash
-anomaly-detector config show
+# 1. 生成测试数据
+anomaly-detector generate-test-data --count 5000
+
+# 2. 训练模型
+anomaly-detector train once --model xgboost --data data/processed/model_features_data.csv
+
+# 3. 评估模型性能
+anomaly-detector train evaluate --model xgboost
+
+# 4. 查看生成的评估报告（假定报告名为reports/xgboost_evaluation_20250727_122142.json）
+#    根据报告中的检测结果ID提交反馈
+anomaly-detector feedback submit --detection-id DETECTION_001 --is-anomaly true --anomaly-type "PortScan"
+anomaly-detector feedback submit --detection-id DETECTION_002 --is-anomaly false
+anomaly-detector feedback submit --detection-id DETECTION_003 --is-anomaly true --anomaly-type "DDoS"
+
+# 5. 基于反馈优化模型
+anomaly-detector train optimize --feedback-based
+
+# 6. 再次训练优化后的模型
+anomaly-detector train once --model xgboost --data data/processed/model_features_data.csv
 ```
 
-### 4.3 修改配置
-可以直接编辑配置文件，或使用命令行工具：
+**第二次闭环优化：**
 ```bash
-# 设置网络接口
-anomaly-detector config set network.interface eth1
+# 1. 启动持续训练模式以自动监测新数据并更新模型
+anomaly-detector train continuous --background
 
-# 设置检测阈值
-anomaly-detector config set detection.threshold 0.85
+# 2. 运行系统一段时间以收集新的网络流量数据
+anomaly-detector start --interface eth0
 
-# 设置日志级别
-anomaly-detector config set general.log_level DEBUG
+# 3. 等待系统运行一段时间后，检查新生成的检测结果并提交反馈
+anomaly-detector feedback submit --detection-id DETECTION_004 --is-anomaly true --anomaly-type "Malware"
+anomaly-detector feedback submit --detection-id DETECTION_005 --is-anomaly false
+
+# 4. 停止系统
+anomaly-detector stop
+
+# 5. 基于新收集的反馈再次优化模型
+anomaly-detector train optimize --feedback-based
+
+# 6. 运行AutoML训练进行全自动优化
+anomaly-detector train automl --model xgboost
 ```
 
-### 4.4 重载配置
-修改配置文件后，可以重载配置而无需重启系统：
-```bash
-anomaly-detector config reload
-```
-
-## 5. 日常维护
-
-### 5.1 数据清理
-
-#### 清理旧数据
-```bash
-# 清理30天前的原始数据
-anomaly-detector data cleanup --days 30 --type raw
-
-# 清理所有类型数据
-anomaly-detector data cleanup --days 7
-```
-
-#### 数据备份
-```bash
-# 备份模型数据
-anomaly-detector data backup --type models --output backup_models_20230615.tar.gz
-
-# 备份所有数据
-anomaly-detector data backup --output full_backup_20230615.tar.gz
-```
-
-### 5.2 系统监控
-
-#### 查看系统健康状态
-```bash
-anomaly-detector health
-```
-
-#### 性能基准测试
-```bash
-anomaly-detector benchmark
-```
-
-#### 资源使用情况
-```bash
-anomaly-detector top
-```
-
-### 5.3 模型更新
-
-#### 手动更新模型
-```bash
-# 从外部文件更新模型
-anomaly-detector models update --type xgboost --file new_xgboost_model.pkl
-
-# 从模型库更新
-anomaly-detector models update --type lstm --version latest
-```
-
-#### 模型性能报告
-```bash
-anomaly-detector models report
-```
-
-## 6. 故障排除
-
-### 6.1 系统启动失败
-
-#### 检查依赖项
-```bash
-# 检查Python版本
-python --version
-
-# 检查必需库
-pip list | grep -E "(numpy|pandas|scikit-learn|xgboost)"
-```
-
-#### 检查权限
-```bash
-# 确保有网络接口访问权限
-sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/python3
-```
-
-#### 检查配置
-```bash
-# 验证配置文件语法
-anomaly-detector config validate
-```
-
-### 6.2 检测性能不佳
-
-#### 检查模型状态
-```bash
-# 查看模型版本和性能
-anomaly-detector models list --detail
-
-# 评估当前模型
-anomaly-detector train evaluate
-```
-
-#### 调整检测参数
-```bash
-# 降低阈值以提高敏感性
-anomaly-detector config set detection.threshold 0.6
-
-# 启用详细日志以诊断问题
-anomaly-detector config set general.log_level DEBUG
-```
-
-### 6.3 误报过多
-
-#### 分析告警反馈
-```bash
-# 查看最近的误报
-anomaly-detector alerts list --type false-positive --limit 10
-
-# 分析误报模式
-anomaly-detector alerts analyze --type false-positive
-```
-
-#### 优化检测规则
-```bash
-# 添加白名单规则
-anomaly-detector config set detection.whitelist.1 "src_ip: 192.168.1.1"
-
-# 调整规则阈值
-anomaly-detector config set detection.rules.icmp_flood_threshold 20
-```
-
-### 6.4 性能问题
-
-#### 降低资源消耗
-```bash
-# 简化特征提取：
-# 在model_config.yaml中添加
-features:
-  reduced_mode: true  # 启用精简特征集
-
-# 调整模型复杂度：
-# 在model_config.yaml中添加
-xgboost:
-  n_estimators: 50
-  max_depth: 4
-```
-
-### 6.5 告警风暴（大量重复告警）
-```bash
-# 增加告警冷却时间：
-# 在config.yaml中添加
-alert:
-  cooldown: 600  # 10分钟内同类型告警只触发一次
-
-# 提高告警级别阈值：
-# 在config.yaml中添加
-alert:
-  level: "high"  # 只处理高级别告警
-
-# 添加抑制规则：
-# 在detection_rules.yaml中添加
-suppress_rules:
-  - name: "已知服务器通信"
-    condition: "dst_ip in ['192.168.1.1', '192.168.1.2']"
-    level: "low"  # 抑制低级别告警
-```
-
-## 7. 联系方式与支持
-
-- 文档中心：https://docs.example.com/anomaly-detection
-- 问题反馈：support@example.com
-- 社区论坛：https://forum.example.com/c/anomaly-detection
-- 紧急支持：400-123-4567（工作日9:00-18:00）
+系统采用闭环优化机制，会根据收集到的反馈数据自动优化特征工程和模型参数，持续提升检测准确性。通过多次闭环优化，系统能够不断适应新的网络环境和威胁模式，提高检测准确率并降低误报率。

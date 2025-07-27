@@ -6,6 +6,7 @@ from datetime import datetime
 from src.system.base_component import BaseComponent
 from src.utils.logger import get_logger, setup_rotating_logger
 from src.config.config_manager import ConfigManager
+from typing import Optional, Dict, Any
 
 class SystemMonitor(BaseComponent):
     """系统监控器，定期采集系统资源使用情况并写入日志"""
@@ -31,6 +32,7 @@ class SystemMonitor(BaseComponent):
         
         # 监控线程
         self._monitor_thread = None
+        self._stop_event = threading.Event()  # 添加停止事件
         
         # 网络IO基准值（用于计算速率）
         self._net_io_counters = psutil.net_io_counters()
@@ -118,20 +120,41 @@ class SystemMonitor(BaseComponent):
         
         # 获取磁盘IO统计
         disk_io = psutil.disk_io_counters()
-        return {
-            "usage": disk_usage,
-            "io": {
+        disk_io_stats = {
+            "read_count": 0,
+            "write_count": 0,
+            "read_bytes": 0,
+            "write_bytes": 0
+        }
+        
+        if disk_io is not None:
+            disk_io_stats.update({
                 "read_count": disk_io.read_count,
                 "write_count": disk_io.write_count,
                 "read_bytes": disk_io.read_bytes,
                 "write_bytes": disk_io.write_bytes
-            }
+            })
+            
+        return {
+            "usage": disk_usage,
+            "io": disk_io_stats
         }
 
     def _monitor_loop(self):
         """监控主循环"""
-        while self._is_running:
+        self.logger.debug("监控循环开始")
+        iteration = 0
+        while self._is_running and not self._stop_event.is_set():
+            iteration += 1
+            self.logger.debug(f"监控循环第 {iteration} 次迭代开始")
+            
             try:
+                # 检查停止事件，确保能及时退出
+                if self._stop_event.is_set():
+                    self.logger.debug("检测到停止事件，退出监控循环")
+                    break
+                    
+                self.logger.debug("开始采集系统指标")
                 # 采集系统指标
                 start_time = time.time()
                 
@@ -172,11 +195,36 @@ class SystemMonitor(BaseComponent):
                 # 计算循环耗时，调整睡眠时间
                 elapsed = time.time() - start_time
                 sleep_time = max(0, self.interval - elapsed)
-                time.sleep(sleep_time)
                 
+                self.logger.debug(f"监控循环耗时: {elapsed:.2f}s, 休眠时间: {sleep_time:.2f}s")
+                
+                # 使用带超时的等待，以便能及时响应停止信号
+                if sleep_time > 0:
+                    # 分段等待，每秒检查一次停止信号
+                    waited = 0.0
+                    while waited < sleep_time and not self._stop_event.is_set():
+                        wait_chunk = min(1.0, sleep_time - waited)
+                        self.logger.debug(f"等待 {wait_chunk:.2f} 秒")
+                        if self._stop_event.wait(timeout=wait_chunk):
+                            self.logger.debug("在休眠期间收到停止信号，退出监控循环")
+                            return
+                        waited += wait_chunk
+                
+                # 再次检查停止事件
+                if self._stop_event.is_set():
+                    self.logger.debug("循环结束时检测到停止事件，退出监控循环")
+                    break
+                    
+                self.logger.debug(f"监控循环第 {iteration} 次迭代结束")
+                    
             except Exception as e:
                 self.logger.error(f"监控循环出错: {str(e)}", exc_info=True)
-                time.sleep(1)
+                # 即使出错也要检查停止信号
+                if self._stop_event.wait(timeout=0.5):
+                    self.logger.debug("出错后等待期间收到停止信号，退出监控循环")
+                    break
+        
+        self.logger.debug("监控循环结束")
 
     def get_latest_metrics(self):
         """获取最近一次的监控指标"""
@@ -189,6 +237,7 @@ class SystemMonitor(BaseComponent):
             return
             
         super().start()
+        self._stop_event.clear()  # 清除停止事件，确保线程能正常运行
         
         # 启动监控线程
         self._monitor_thread = threading.Thread(
@@ -201,20 +250,31 @@ class SystemMonitor(BaseComponent):
 
     def stop(self):
         """停止系统监控"""
+        self.logger.debug("SystemMonitor.stop() 方法被调用")
         if not self._is_running:
+            self.logger.debug("系统监控未运行，无需停止")
             return
             
+        self.logger.debug("正在停止系统监控")
         super().stop()
+        self._stop_event.set()  # 设置停止事件
+        self.logger.debug("已设置停止事件")
         
         # 停止监控线程
         if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=5)
+            self.logger.debug(f"等待监控线程结束，线程ID: {self._monitor_thread.ident}")
+            # 使用更短的超时时间并添加调试信息
+            self._monitor_thread.join(timeout=2)
             if self._monitor_thread.is_alive():
-                self.logger.warning("监控线程未能正常终止")
+                self.logger.warning("监控组件线程未能正常终止")
+            else:
+                self.logger.debug("监控组件线程已正常终止")
+        else:
+            self.logger.debug("监控线程不存在或已停止")
         
         self.logger.info("系统监控已停止")
 
-    def get_status(self):
+    def get_status(self) -> Dict[str, Any]:
         """获取监控组件状态"""
         status = super().get_status()
         status.update({

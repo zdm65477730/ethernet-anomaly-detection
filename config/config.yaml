@@ -3,7 +3,7 @@ system:
   pid_file: anomaly_detector.pid
   max_restarts: 3
 capture:
-  interface: eth0
+  interface: ''
   bpf_filter: ''
   buffer_size: 1048576
   snaplen: 65535

@@ -7,6 +7,7 @@ from src.features.protocol_specs import (
     is_feature_relevant
 )
 from src.utils.helpers import calculate_entropy
+from src.config.config_manager import ConfigManager
 
 class StatFeatureExtractor(BaseFeatureExtractor):
     """
@@ -18,7 +19,11 @@ class StatFeatureExtractor(BaseFeatureExtractor):
     def __init__(self, config=None):
         super().__init__()
         
-        # 获取配置管理器实例
+        # 初始化配置
+        self._init_config(config)
+    
+    def _init_config(self, config):
+        """初始化配置"""
         if config is None:
             from src.config.config_manager import ConfigManager
             config = ConfigManager()
@@ -35,152 +40,170 @@ class StatFeatureExtractor(BaseFeatureExtractor):
         # 如果没有显式配置，启用所有特征
         if not self.enabled_features and not self.disabled_features:
             self.enabled_features = list(self.feature_metadata.keys())
-    
+            
     def _init_feature_metadata(self):
         """初始化特征元数据"""
         self.feature_metadata = {
-            # 基本流量特征
+            # 基本统计特征
             "packet_count": {
                 "type": "numeric",
-                "description": "会话中的数据包总数"
+                "description": "会话中的数据包总数",
+                "min": 0,
+                "max": float("inf")
             },
             "byte_count": {
                 "type": "numeric",
-                "description": "会话中的总字节数"
+                "description": "会话中的总字节数",
+                "min": 0,
+                "max": float("inf")
             },
             "flow_duration": {
                 "type": "numeric",
-                "description": "会话持续时间(秒)"
+                "description": "会话持续时间(秒)",
+                "min": 0,
+                "max": float("inf")
             },
-            "packets_per_second": {
+            "avg_packet_size": {
                 "type": "numeric",
-                "description": "每秒数据包数"
+                "description": "平均数据包大小",
+                "min": 0,
+                "max": 65535
+            },
+            "std_packet_size": {
+                "type": "numeric",
+                "description": "数据包大小标准差",
+                "min": 0,
+                "max": 65535
+            },
+            "min_packet_size": {
+                "type": "numeric",
+                "description": "最小数据包大小",
+                "min": 0,
+                "max": 65535
+            },
+            "max_packet_size": {
+                "type": "numeric",
+                "description": "最大数据包大小",
+                "min": 0,
+                "max": 65535
             },
             "bytes_per_second": {
                 "type": "numeric",
-                "description": "每秒字节数"
+                "description": "每秒字节数",
+                "min": 0,
+                "max": float("inf")
+            },
+            "packets_per_second": {
+                "type": "numeric",
+                "description": "每秒数据包数",
+                "min": 0,
+                "max": float("inf")
             },
             
-            # 包大小特征
-            "packet_size_mean": {
+            # 协议特征
+            "tcp_syn_count": {
                 "type": "numeric",
-                "description": "数据包大小的平均值"
+                "description": "TCP SYN包数量",
+                "min": 0,
+                "max": float("inf")
             },
-            "packet_size_std": {
+            "tcp_ack_count": {
                 "type": "numeric",
-                "description": "数据包大小的标准差"
+                "description": "TCP ACK包数量",
+                "min": 0,
+                "max": float("inf")
             },
-            "packet_size_min": {
+            "tcp_fin_count": {
                 "type": "numeric",
-                "description": "最小数据包大小"
+                "description": "TCP FIN包数量",
+                "min": 0,
+                "max": float("inf")
             },
-            "packet_size_max": {
+            "tcp_rst_count": {
                 "type": "numeric",
-                "description": "最大数据包大小"
+                "description": "TCP RST包数量",
+                "min": 0,
+                "max": float("inf")
             },
-            "packet_size_median": {
+            "tcp_flag_ratio": {
                 "type": "numeric",
-                "description": "数据包大小的中位数"
+                "description": "TCP标志包占比",
+                "min": 0,
+                "max": 1
+            },
+            "tcp_packet_ratio": {
+                "type": "numeric",
+                "description": "TCP包占比",
+                "min": 0,
+                "max": 1
+            },
+            
+            "udp_packet_ratio": {
+                "type": "numeric",
+                "description": "UDP包占比",
+                "min": 0,
+                "max": 1
+            },
+            
+            "icmp_packet_ratio": {
+                "type": "numeric",
+                "description": "ICMP包占比",
+                "min": 0,
+                "max": 1
             },
             
             # 载荷特征
-            "payload_size_mean": {
+            "avg_payload_size": {
                 "type": "numeric",
-                "description": "载荷大小的平均值"
+                "description": "平均载荷大小",
+                "min": 0,
+                "max": 65535
+            },
+            "payload_entropy": {
+                "type": "numeric",
+                "description": "载荷熵值",
+                "min": 0,
+                "max": 8
             },
             "payload_size_std": {
                 "type": "numeric",
-                "description": "载荷大小的标准差"
-            },
-            "payload_entropy_mean": {
-                "type": "numeric",
-                "description": "载荷熵的平均值（衡量随机性）"
-            },
-            "has_payload": {
-                "type": "binary",
-                "description": "是否包含载荷（1是，0否）"
+                "description": "载荷大小标准差",
+                "min": 0,
+                "max": 65535
             },
             
-            # TCP专属特征
-            "tcp_flags": {
-                "type": "categorical",
-                "description": "TCP标志位组合"
-            },
-            "tcp_flag_syn": {
-                "type": "binary",
-                "description": "是否设置SYN标志位"
-            },
-            "tcp_flag_ack": {
-                "type": "binary",
-                "description": "是否设置ACK标志位"
-            },
-            "tcp_flag_fin": {
-                "type": "binary",
-                "description": "是否设置FIN标志位"
-            },
-            "tcp_flag_rst": {
-                "type": "binary",
-                "description": "是否设置RST标志位"
-            },
-            "window_size_mean": {
+            # 端口特征
+            "src_port_entropy": {
                 "type": "numeric",
-                "description": "TCP窗口大小的平均值"
+                "description": "源端口熵值",
+                "min": 0,
+                "max": 16
             },
-            "window_size_std": {
+            "dst_port_entropy": {
                 "type": "numeric",
-                "description": "TCP窗口大小的标准差"
-            },
-            "retransmission_count": {
-                "type": "numeric",
-                "description": "TCP重传次数"
-            },
-            "segment_size_mean": {
-                "type": "numeric",
-                "description": "TCP段大小的平均值"
+                "description": "目标端口熵值",
+                "min": 0,
+                "max": 16
             },
             
-            # UDP专属特征
-            "port_range": {
+            # 方向特征
+            "outbound_packet_ratio": {
                 "type": "numeric",
-                "description": "目标端口范围"
+                "description": "出站包占比",
+                "min": 0,
+                "max": 1
             },
-            "unique_dest_ports": {
+            "inbound_packet_ratio": {
                 "type": "numeric",
-                "description": "唯一目标端口数量"
-            },
-            
-            # ICMP专属特征
-            "icmp_type": {
-                "type": "categorical",
-                "description": "ICMP消息类型"
-            },
-            "icmp_code": {
-                "type": "categorical",
-                "description": "ICMP消息代码"
-            },
-            "request_response_ratio": {
-                "type": "numeric",
-                "description": "ICMP请求与响应的比例"
-            },
-            "echo_request_count": {
-                "type": "numeric",
-                "description": "ICMP回显请求数量"
-            },
-            "echo_reply_count": {
-                "type": "numeric",
-                "description": "ICMP回显响应数量"
-            },
-            
-            # 时间特征
-            "inter_arrival_time_mean": {
-                "type": "numeric",
-                "description": "数据包到达间隔的平均值"
-            },
-            "inter_arrival_time_std": {
-                "type": "numeric",
-                "description": "数据包到达间隔的标准差"
+                "description": "入站包占比",
+                "min": 0,
+                "max": 1
             }
         }
+    
+    def get_feature_names(self):
+        """获取所有可能的特征名称"""
+        return list(self.feature_metadata.keys())
     
     def extract_features(self, packet, session):
         """
@@ -263,6 +286,9 @@ class StatFeatureExtractor(BaseFeatureExtractor):
         features = {}
         
         if not session or not session.packets or len(session.packets) == 0:
+            # 返回零值特征而不是空特征
+            for feature_name in self.get_enabled_features():
+                features[feature_name] = 0
             return features
             
         # 获取协议信息
@@ -277,6 +303,9 @@ class StatFeatureExtractor(BaseFeatureExtractor):
                 protocol_num = first_packet["ip"].get("protocol")
         
         if protocol_num is None:
+            # 返回零值特征而不是空特征
+            for feature_name in self.get_enabled_features():
+                features[feature_name] = 0
             return features
             
         spec = get_protocol_spec(protocol_num)
@@ -299,153 +328,139 @@ class StatFeatureExtractor(BaseFeatureExtractor):
         if len(timestamps) >= 2 and "flow_duration" in relevant_features:
             flow_duration = max(timestamps) - min(timestamps)
             features["flow_duration"] = flow_duration if flow_duration > 0 else 0.001  # 避免除以零
-            
-            # 计算每秒数据包数和字节数
-            if "packets_per_second" in relevant_features:
-                features["packets_per_second"] = len(session.packets) / features["flow_duration"]
-            if "bytes_per_second" in relevant_features and "byte_count" in features:
-                features["bytes_per_second"] = features["byte_count"] / features["flow_duration"]
         
-        # 包大小特征
+        # 数据包大小特征
         packet_sizes = [packet.get("length", 0) for packet in session.packets]
-        if packet_sizes and "packet_size_mean" in relevant_features:
-            features["packet_size_mean"] = np.mean(packet_sizes)
-        if len(packet_sizes) >= 2 and "packet_size_std" in relevant_features:
-            features["packet_size_std"] = np.std(packet_sizes)
-        if packet_sizes and "packet_size_min" in relevant_features:
-            features["packet_size_min"] = np.min(packet_sizes)
-        if packet_sizes and "packet_size_max" in relevant_features:
-            features["packet_size_max"] = np.max(packet_sizes)
-        if packet_sizes and "packet_size_median" in relevant_features:
-            features["packet_size_median"] = np.median(packet_sizes)
+        if packet_sizes:
+            if "avg_packet_size" in relevant_features:
+                features["avg_packet_size"] = np.mean(packet_sizes)
+            if "std_packet_size" in relevant_features and len(packet_sizes) > 1:
+                features["std_packet_size"] = np.std(packet_sizes)
+            if "min_packet_size" in relevant_features:
+                features["min_packet_size"] = min(packet_sizes)
+            if "max_packet_size" in relevant_features:
+                features["max_packet_size"] = max(packet_sizes)
+        else:
+            # 如果没有数据包，填充默认值
+            for feature_name in ["avg_packet_size", "std_packet_size", "min_packet_size", "max_packet_size"]:
+                if feature_name in relevant_features:
+                    features[feature_name] = 0
+        
+        # 速率特征
+        if "flow_duration" in features and features["flow_duration"] > 0:
+            if "bytes_per_second" in relevant_features:
+                features["bytes_per_second"] = features["byte_count"] / features["flow_duration"]
+            if "packets_per_second" in relevant_features:
+                features["packets_per_second"] = features["packet_count"] / features["flow_duration"]
+        else:
+            # 如果没有持续时间，填充默认值
+            for feature_name in ["bytes_per_second", "packets_per_second"]:
+                if feature_name in relevant_features:
+                    features[feature_name] = 0
+        
+        # 协议特定特征
+        tcp_packets = [p for p in session.packets if p.get("ip", {}).get("protocol") == 6]
+        udp_packets = [p for p in session.packets if p.get("ip", {}).get("protocol") == 17]
+        icmp_packets = [p for p in session.packets if p.get("ip", {}).get("protocol") in (1, 58)]
+        
+        total_packets = len(session.packets)
+        
+        # TCP特征
+        if tcp_packets:
+            if "tcp_syn_count" in relevant_features:
+                syn_count = sum(1 for p in tcp_packets 
+                              if p.get("transport", {}).get("flags", 0) & 0x02)
+                features["tcp_syn_count"] = syn_count
+                
+            if "tcp_ack_count" in relevant_features:
+                ack_count = sum(1 for p in tcp_packets 
+                              if p.get("transport", {}).get("flags", 0) & 0x10)
+                features["tcp_ack_count"] = ack_count
+                
+            if "tcp_fin_count" in relevant_features:
+                fin_count = sum(1 for p in tcp_packets 
+                              if p.get("transport", {}).get("flags", 0) & 0x01)
+                features["tcp_fin_count"] = fin_count
+                
+            if "tcp_rst_count" in relevant_features:
+                rst_count = sum(1 for p in tcp_packets 
+                              if p.get("transport", {}).get("flags", 0) & 0x04)
+                features["tcp_rst_count"] = rst_count
+                
+            if "tcp_flag_ratio" in relevant_features:
+                flag_packets = sum(1 for p in tcp_packets 
+                                 if p.get("transport", {}).get("flags", 0) != 0)
+                features["tcp_flag_ratio"] = flag_packets / len(tcp_packets) if tcp_packets else 0
+                
+            if "tcp_packet_ratio" in relevant_features and total_packets > 0:
+                features["tcp_packet_ratio"] = len(tcp_packets) / total_packets
+        
+        # UDP特征
+        if "udp_packet_ratio" in relevant_features and total_packets > 0:
+            features["udp_packet_ratio"] = len(udp_packets) / total_packets
+            
+        # ICMP特征
+        if "icmp_packet_ratio" in relevant_features and total_packets > 0:
+            features["icmp_packet_ratio"] = len(icmp_packets) / total_packets
         
         # 载荷特征
-        payloads = [packet.get("payload", b"") for packet in session.packets]
+        payloads = [p.get("payload", b"") for p in session.packets]
         payload_sizes = [len(p) for p in payloads]
-        if payload_sizes and "payload_size_mean" in relevant_features:
-            features["payload_size_mean"] = np.mean(payload_sizes)
-        if len(payload_sizes) >= 2 and "payload_size_std" in relevant_features:
-            features["payload_size_std"] = np.std(payload_sizes)
-        if any(payloads) and "payload_entropy_mean" in relevant_features:
-            entropies = [calculate_entropy(p) for p in payloads if len(p) > 0]
-            if entropies:
-                features["payload_entropy_mean"] = np.mean(entropies)
-        if "has_payload" in relevant_features:
-            features["has_payload"] = 1 if any(len(p) > 0 for p in payloads) else 0
         
-        # 时间间隔特征
-        if len(timestamps) >= 2 and "inter_arrival_time_mean" in relevant_features:
-            inter_arrivals = [timestamps[i] - timestamps[i-1] for i in range(1, len(timestamps))]
-            features["inter_arrival_time_mean"] = np.mean(inter_arrivals)
-        if len(timestamps) >= 3 and "inter_arrival_time_std" in relevant_features:
-            inter_arrivals = [timestamps[i] - timestamps[i-1] for i in range(1, len(timestamps))]
-            features["inter_arrival_time_std"] = np.std(inter_arrivals)
+        if payload_sizes:
+            if "avg_payload_size" in relevant_features:
+                features["avg_payload_size"] = np.mean(payload_sizes)
+            if "payload_size_std" in relevant_features and len(payload_sizes) > 1:
+                features["payload_size_std"] = np.std(payload_sizes)
+        else:
+            # 如果没有载荷，填充默认值
+            for feature_name in ["avg_payload_size", "payload_size_std"]:
+                if feature_name in relevant_features:
+                    features[feature_name] = 0
         
-        # TCP专属特征
-        if protocol_num == 6:  # TCP
-            # TCP标志位统计
-            flags_list = [p.get("transport", {}).get("flags", 0) for p in session.packets]
-            if flags_list and "tcp_flags" in relevant_features:
-                # 统计最常见的标志组合
-                flag_counts = defaultdict(int)
-                for flag in flags_list:
-                    flag_counts[flag] += 1
-                features["tcp_flags"] = max(flag_counts, key=flag_counts.get)
-            
-            # 特定标志位计数
-            if "tcp_flag_syn" in relevant_features:
-                syn_count = sum(1 for p in session.packets if (p.get("transport", {}).get("flags", 0) & 0x02))
-                features["tcp_flag_syn"] = 1 if syn_count > 0 else 0
-            if "tcp_flag_ack" in relevant_features:
-                ack_count = sum(1 for p in session.packets if (p.get("transport", {}).get("flags", 0) & 0x10))
-                features["tcp_flag_ack"] = 1 if ack_count > 0 else 0
-            if "tcp_flag_fin" in relevant_features:
-                fin_count = sum(1 for p in session.packets if (p.get("transport", {}).get("flags", 0) & 0x01))
-                features["tcp_flag_fin"] = 1 if fin_count > 0 else 0
-            if "tcp_flag_rst" in relevant_features:
-                rst_count = sum(1 for p in session.packets if (p.get("transport", {}).get("flags", 0) & 0x04))
-                features["tcp_flag_rst"] = 1 if rst_count > 0 else 0
-            
-            # 窗口大小统计
-            window_sizes = [p.get("transport", {}).get("winsize", 0) for p in session.packets if p.get("transport")]
-            if window_sizes and "window_size_mean" in relevant_features:
-                features["window_size_mean"] = np.mean(window_sizes)
-            if len(window_sizes) >= 2 and "window_size_std" in relevant_features:
-                features["window_size_std"] = np.std(window_sizes)
-            
-            # 重传计数（简化版，实际应基于序列号检测）
-            if "retransmission_count" in relevant_features:
-                # 这里使用RST标志位作为重传的简单指标
-                features["retransmission_count"] = sum(1 for p in session.packets if (p.get("transport", {}).get("flags", 0) & 0x04))
-            
-            # 段大小统计
-            if "segment_size_mean" in relevant_features:
-                segment_sizes = [len(p.get("payload", b"")) for p in session.packets]
-                if segment_sizes:
-                    features["segment_size_mean"] = np.mean(segment_sizes)
+        if payloads and any(p for p in payloads if len(p) > 0):
+            if "payload_entropy" in relevant_features:
+                # 计算所有载荷的组合熵
+                combined_payload = b"".join(p for p in payloads if len(p) > 0)
+                features["payload_entropy"] = calculate_entropy(combined_payload) if combined_payload else 0
+        else:
+            if "payload_entropy" in relevant_features:
+                features["payload_entropy"] = 0
         
-        # UDP专属特征
-        elif protocol_num == 17:  # UDP
-            # 端口特征
-            dest_ports = [p.get("transport", {}).get("dport", 0) for p in session.packets if p.get("transport")]
-            if dest_ports and "port_range" in relevant_features:
-                features["port_range"] = max(dest_ports) - min(dest_ports) if len(set(dest_ports)) > 1 else 0
-            if dest_ports and "unique_dest_ports" in relevant_features:
-                features["unique_dest_ports"] = len(set(dest_ports))
+        # 端口特征
+        src_ports = [p.get("src_port", 0) for p in session.packets if "src_port" in p]
+        dst_ports = [p.get("dst_port", 0) for p in session.packets if "dst_port" in p]
         
-        # ICMP专属特征
-        elif protocol_num in (1, 58):  # ICMP或ICMPv6
-            icmp_types = [p.get("transport", {}).get("type", -1) for p in session.packets if p.get("transport")]
-            icmp_codes = [p.get("transport", {}).get("code", -1) for p in session.packets if p.get("transport")]
+        if src_ports and "src_port_entropy" in relevant_features:
+            features["src_port_entropy"] = calculate_entropy(src_ports)
+        elif "src_port_entropy" in relevant_features:
+            features["src_port_entropy"] = 0
             
-            if icmp_types and "icmp_type" in relevant_features:
-                # 最常见的类型
-                type_counts = defaultdict(int)
-                for t in icmp_types:
-                    type_counts[t] += 1
-                features["icmp_type"] = max(type_counts, key=type_counts.get)
-            
-            if icmp_codes and "icmp_code" in relevant_features:
-                # 最常见的代码
-                code_counts = defaultdict(int)
-                for c in icmp_codes:
-                    code_counts[c] += 1
-                features["icmp_code"] = max(code_counts, key=code_counts.get)
-            
-            # 回显请求/响应计数
-            if "echo_request_count" in relevant_features or "echo_reply_count" in relevant_features:
-                echo_requests = 0
-                echo_replies = 0
-                for p in session.packets:
-                    transport = p.get("transport", {})
-                    if not transport:
-                        continue
-                    if protocol_num == 1:  # ICMP
-                        if transport.get("type") == 8:  # 回显请求
-                            echo_requests += 1
-                        elif transport.get("type") == 0:  # 回显响应
-                            echo_replies += 1
-                    elif protocol_num == 58:  # ICMPv6
-                        if transport.get("type") == 128:  # 回显请求
-                            echo_requests += 1
-                        elif transport.get("type") == 129:  # 回显响应
-                            echo_replies += 1
+        if dst_ports and "dst_port_entropy" in relevant_features:
+            features["dst_port_entropy"] = calculate_entropy(dst_ports)
+        elif "dst_port_entropy" in relevant_features:
+            features["dst_port_entropy"] = 0
+        
+        # 方向特征
+        if hasattr(session, 'direction') and total_packets > 0:
+            if "outbound_packet_ratio" in relevant_features:
+                outbound_count = sum(1 for p in session.packets 
+                                   if getattr(session, 'direction', '') == 'outbound')
+                features["outbound_packet_ratio"] = outbound_count / total_packets
                 
-                if "echo_request_count" in relevant_features:
-                    features["echo_request_count"] = echo_requests
-                if "echo_reply_count" in relevant_features:
-                    features["echo_reply_count"] = echo_replies
+            if "inbound_packet_ratio" in relevant_features:
+                inbound_count = sum(1 for p in session.packets 
+                                  if getattr(session, 'direction', '') == 'inbound')
+                features["inbound_packet_ratio"] = inbound_count / total_packets
+        else:
+            # 如果没有方向信息，填充默认值
+            for feature_name in ["outbound_packet_ratio", "inbound_packet_ratio"]:
+                if feature_name in relevant_features:
+                    features[feature_name] = 0
+        
+        # 确保所有启用的特征都有值
+        for feature_name in relevant_features:
+            if feature_name not in features:
+                features[feature_name] = 0
                 
-                # 请求响应比例
-                if "request_response_ratio" in relevant_features:
-                    if echo_replies == 0:
-                        features["request_response_ratio"] = float('inf') if echo_requests > 0 else 0
-                    else:
-                        features["request_response_ratio"] = echo_requests / echo_replies
-        
-        # 填充缺失值为0
-        for feature in relevant_features:
-            if feature not in features:
-                features[feature] = 0
-        
         return features

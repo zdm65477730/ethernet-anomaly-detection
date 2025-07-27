@@ -281,59 +281,89 @@ graph TD
 
 ## 8. 命令行接口
 
-系统提供统一的命令行接口，所有操作均通过`anomaly-detector`命令执行。根据实际代码结构（cli/目录），更新命令格式如下：
+系统提供统一的命令行接口，所有操作均通过`anomaly-detector`命令执行。
 
 ### 8.1 系统管理命令
 
 ```bash
 # 初始化系统
-python -m cli.system init
+anomaly-detector init
 
 # 启动系统
-python -m cli.system start
+anomaly-detector start
 
 # 停止系统
-python -m cli.system stop
+anomaly-detector stop
 
 # 查看系统状态
-python -m cli.system status
+anomaly-detector status
 ```
 
 ### 8.2 模型训练命令
 
 ```bash
 # 单次训练
-python -m cli.model train --mode once
+anomaly-detector train once
 
 # 持续训练
-python -m cli.model train --mode continuous
+anomaly-detector train continuous
 
 # 评估模型
-python -m cli.model evaluate
+anomaly-detector train evaluate
 
 # 优化模型
-python -m cli.model optimize
+anomaly-detector train optimize
 
 # AutoML训练
-python -m cli.model automl
+anomaly-detector train automl
 ```
 
 ### 8.3 模型管理命令
 
 ```bash
 # 查看模型列表
-python -m cli.model list
+anomaly-detector models list
 
 # 切换模型版本
-python -m cli.model use --type xgboost --version 20230615_1230
+anomaly-detector models use --type xgboost --version 20230615_1230
 ```
 
 ### 8.4 告警管理命令
 
 ```bash
 # 查看告警列表
-python -m cli.alert list
+anomaly-detector alerts list
 
 # 处理告警反馈
-python -m cli.alert feedback --alert-id ALERT_12345 --correct
+anomaly-detector alerts feedback --alert-id ALERT_12345 --correct
+```
+
+### 8.5 反馈处理命令
+
+```bash
+# 提交检测结果反馈
+anomaly-detector feedback submit --detection-id ALERT_12345 --is-anomaly true
+
+# 查看反馈列表
+anomaly-detector feedback list
+
+# 清理旧反馈数据
+anomaly-detector feedback cleanup
+```
+
+### 8.6 报告生成命令
+
+```bash
+# 生成检测报告
+anomaly-detector report generate --last-hours 24
+
+# 生成评估报告
+anomaly-detector report generate --type evaluation --last-hours 24
+```
+
+### 8.7 测试数据生成命令
+
+```bash
+# 生成测试数据
+anomaly-detector generate-test-data
 ```

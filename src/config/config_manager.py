@@ -253,7 +253,7 @@ class ConfigManager:
             parts = path.split(".")
             config_dict = self._config
         
-        # 遍历路径获取值
+        # 递归获取配置值
         current = config_dict
         for part in parts:
             if isinstance(current, dict) and part in current:
@@ -261,6 +261,37 @@ class ConfigManager:
             else:
                 return default
         return current
+    
+    @staticmethod
+    def config_file_exists(config_dir: str = "config") -> bool:
+        """
+        检查配置文件是否存在
+        
+        Args:
+            config_dir: 配置文件目录
+            
+        Returns:
+            配置文件是否存在
+        """
+        config_path = os.path.join(config_dir, "config.yaml")
+        return os.path.exists(config_path)
+    
+    @staticmethod
+    def create_default_config(config_dir: str = "config") -> None:
+        """
+        创建默认配置文件
+        
+        Args:
+            config_dir: 配置文件目录
+        """
+        # 确保配置目录存在
+        os.makedirs(config_dir, exist_ok=True)
+        
+        # 创建配置管理器实例以获取默认配置
+        config_manager = ConfigManager(config_dir)
+        
+        # 保存配置
+        config_manager.save()
     
     def set(self, path: str, value: Any) -> None:
         """

@@ -335,3 +335,57 @@ class FeedbackProcessor(BaseComponent):
         })
         return status
     
+    def calculate_metrics_from_feedback(self):
+        """
+        基于反馈数据计算评估指标
+        
+        返回:
+            包含整体评估指标的字典
+        """
+        # 计算总体性能指标
+        total_tp = sum(perf.get("tp", 0) for perf in self.protocol_performance.values())
+        total_fp = sum(perf.get("fp", 0) for perf in self.protocol_performance.values())
+        total_tn = sum(perf.get("tn", 0) for perf in self.protocol_performance.values())
+        total_fn = sum(perf.get("fn", 0) for perf in self.protocol_performance.values())
+        
+        # 计算总体指标
+        precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
+        recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        accuracy = (total_tp + total_tn) / (total_tp + total_fp + total_tn + total_fn) if (total_tp + total_fp + total_tn + total_fn) > 0 else 0
+        
+        return {
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "accuracy": accuracy,
+            "tp": total_tp,
+            "fp": total_fp,
+            "tn": total_tn,
+            "fn": total_fn
+        }
+    
+    def get_feedback_data(self):
+        """
+        获取反馈数据
+        
+        返回:
+            反馈数据列表
+        """
+        feedback_data = []
+        
+        # 遍历反馈目录
+        try:
+            for filename in os.listdir(self.feedback_dir):
+                if not filename.endswith(".json"):
+                    continue
+                    
+                file_path = os.path.join(self.feedback_dir, filename)
+                with open(file_path, "r") as f:
+                    feedbacks = json.load(f)
+                    feedback_data.extend(feedbacks)
+                    
+            return feedback_data
+        except Exception as e:
+            self.logger.error(f"获取反馈数据时出错: {str(e)}")
+            return []

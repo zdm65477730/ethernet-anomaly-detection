@@ -12,7 +12,7 @@
 6. **配置管理模块** (`src/config/`) - 管理系统配置参数
 7. **工具模块** (`src/utils/`) - 提供通用工具函数
 
-```mermaid
+``mermaid
 graph TD
     A[数据采集层] --> B[特征提取层]
     B --> C[模型层]
@@ -546,6 +546,42 @@ anomaly-detector alerts list
 #### 处理告警反馈
 ```bash
 anomaly-detector alerts feedback --alert-id ALERT_12345 --correct
+```
+
+### 9.5 反馈处理命令
+
+#### 提交检测结果反馈
+```bash
+anomaly-detector feedback submit --detection-id ALERT_12345 --is-anomaly true
+```
+
+#### 查看反馈列表
+```bash
+anomaly-detector feedback list
+```
+
+#### 清理旧反馈数据
+```bash
+anomaly-detector feedback cleanup
+```
+
+### 9.6 报告生成命令
+
+#### 生成检测报告
+```bash
+anomaly-detector report generate --last-hours 24
+```
+
+#### 生成评估报告
+```bash
+anomaly-detector report generate --type evaluation --last-hours 24
+```
+
+### 9.7 测试数据生成命令
+
+#### 生成测试数据
+```bash
+anomaly-detector generate-test-data
 ```
 
 ## 10. 错误处理与日志

@@ -18,7 +18,11 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
     def __init__(self, config=None):
         super().__init__()
         
-        # 获取配置管理器实例
+        # 初始化配置
+        self._init_config(config)
+    
+    def _init_config(self, config):
+        """初始化配置"""
         if config is None:
             from src.config.config_manager import ConfigManager
             config = ConfigManager()
@@ -43,171 +47,102 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         if not self.enabled_features and not self.disabled_features:
             self.enabled_features = list(self.feature_metadata.keys())
             
-        # 初始化会话时序数据
-        self.session_temporal_data = {}
-        
-        # 初始化线程相关变量
-        self._processing_thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
+        # 初始化滑动窗口
+        self._init_windows()
     
     def _init_feature_metadata(self):
         """初始化特征元数据"""
-        # 为每个窗口类型创建特征元数据
+        self.feature_metadata = {}
+        
+        # 为每个窗口类型初始化特征
         for window_type in self.window_configs.keys():
-            window_size = self.window_configs[window_type]["size"]
-            
-            self.feature_metadata[f"{window_type}_window_packet_rate"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的数据包速率(包/秒)"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_byte_rate"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的字节速率(字节/秒)"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_packet_size_mean"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的平均数据包大小"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_packet_size_std"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的数据包大小标准差"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_inter_arrival_mean"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的平均到达间隔(秒)"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_inter_arrival_std"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的到达间隔标准差"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_burst_count"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的流量突发次数"
-            }
-            
-            self.feature_metadata[f"{window_type}_window_burst_duration_mean"] = {
-                "type": "numeric",
-                "description": f"{window_size}秒窗口内的平均突发持续时间(秒)"
-            }
-        
-        # 跨窗口特征
-        self.feature_metadata["packet_rate_trend"] = {
-            "type": "numeric",
-            "description": "数据包速率趋势（斜率），正为上升，负为下降"
-        }
-        
-        self.feature_metadata["byte_rate_trend"] = {
-            "type": "numeric",
-            "description": "字节速率趋势（斜率），正为上升，负为下降"
-        }
-        
-        self.feature_metadata["packet_size_variation"] = {
-            "type": "numeric",
-            "description": "数据包大小的变化率"
-        }
-        
-        self.feature_metadata["inter_arrival_variation"] = {
-            "type": "numeric",
-            "description": "数据包到达间隔的变化率"
-        }
-    
-    def _get_window_packets(self, session_id, window_type, packet):
-        """
-        获取指定会话和窗口类型的数据包队列，并添加新数据包
-        
-        参数:
-            session_id: 会话ID
-            window_type: 窗口类型 ("short", "medium", "long")
-            packet: 新数据包
-            
-        返回:
-            窗口内的数据包队列
-        """
-        # 初始化会话时序数据
-        if session_id not in self.session_temporal_data:
-            self.session_temporal_data[session_id] = {}
-        
-        # 初始化窗口数据包队列
-        if window_type not in self.session_temporal_data[session_id]:
-            self.session_temporal_data[session_id][window_type] = deque()
-        
-        window_packets = self.session_temporal_data[session_id][window_type]
-        window_size = self.window_configs[window_type]["size"]
-        packet_time = packet.get("timestamp", time.time())
-        
-        # 移除窗口外的数据包
-        while window_packets and (packet_time - window_packets[0].get("timestamp", 0) > window_size):
-            window_packets.popleft()
-        
-        # 添加新数据包
-        window_packets.append(packet)
-        
-        return window_packets
-    
-    def _calculate_burst_features(self, timestamps, inter_arrivals):
-        """
-        计算流量突发特征
-        
-        参数:
-            timestamps: 时间戳列表
-            inter_arrivals: 到达间隔列表
-            
-        返回:
-            包含突发次数和平均突发持续时间的字典
-        """
-        if len(timestamps) < 2:
-            return {"burst_count": 0, "burst_duration_mean": 0}
-        
-        # 计算突发阈值（使用到达间隔的平均值的1/2）
-        mean_inter_arrival = np.mean(inter_arrivals) if inter_arrivals else 0
-        burst_threshold = mean_inter_arrival / 2 if mean_inter_arrival > 0 else 0.1
-        
-        # 检测突发
-        bursts = []
-        current_burst_start = timestamps[0]
-        in_burst = True
-        
-        for i, inter in enumerate(inter_arrivals):
-            if inter < burst_threshold and in_burst:
-                # 持续在突发中
-                continue
-            elif inter >= burst_threshold and in_burst:
-                # 突发结束
-                current_burst_end = timestamps[i]
-                bursts.append({
-                    "start": current_burst_start,
-                    "end": current_burst_end,
-                    "duration": current_burst_end - current_burst_start
-                })
-                in_burst = False
-            elif inter < burst_threshold and not in_burst:
-                # 突发开始
-                current_burst_start = timestamps[i]
-                in_burst = True
-        
-        # 检查最后是否在突发中
-        if in_burst:
-            bursts.append({
-                "start": current_burst_start,
-                "end": timestamps[-1],
-                "duration": timestamps[-1] - current_burst_start
+            self.feature_metadata.update({
+                f"{window_type}_window_packet_rate": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口数据包速率(包/秒)",
+                    "min": 0,
+                    "max": float("inf")
+                },
+                f"{window_type}_window_byte_rate": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口字节速率(字节/秒)",
+                    "min": 0,
+                    "max": float("inf")
+                },
+                f"{window_type}_window_packet_size_mean": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口平均数据包大小",
+                    "min": 0,
+                    "max": 65535
+                },
+                f"{window_type}_window_packet_size_std": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口数据包大小标准差",
+                    "min": 0,
+                    "max": 65535
+                },
+                f"{window_type}_window_inter_arrival_mean": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口包到达间隔平均值(秒)",
+                    "min": 0,
+                    "max": float("inf")
+                },
+                f"{window_type}_window_inter_arrival_std": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口包到达间隔标准差",
+                    "min": 0,
+                    "max": float("inf")
+                },
+                f"{window_type}_window_burst_count": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口突发次数",
+                    "min": 0,
+                    "max": float("inf")
+                },
+                f"{window_type}_window_burst_duration_mean": {
+                    "type": "numeric",
+                    "description": f"{window_type}窗口平均突发持续时间(秒)",
+                    "min": 0,
+                    "max": float("inf")
+                }
             })
         
-        # 计算突发特征
-        burst_count = len(bursts)
-        burst_duration_mean = np.mean([b["duration"] for b in bursts]) if bursts else 0
-        
-        return {
-            "burst_count": burst_count,
-            "burst_duration_mean": burst_duration_mean
-        }
+        # 趋势特征
+        self.feature_metadata.update({
+            "packet_rate_trend": {
+                "type": "numeric",
+                "description": "数据包速率趋势",
+                "min": -float("inf"),
+                "max": float("inf")
+            },
+            "byte_rate_trend": {
+                "type": "numeric",
+                "description": "字节速率趋势",
+                "min": -float("inf"),
+                "max": float("inf")
+            },
+            "packet_size_variation": {
+                "type": "numeric",
+                "description": "数据包大小变化率",
+                "min": 0,
+                "max": float("inf")
+            },
+            "inter_arrival_variation": {
+                "type": "numeric",
+                "description": "包到达间隔变化率",
+                "min": 0,
+                "max": float("inf")
+            }
+        })
     
+    def get_feature_names(self):
+        """获取所有可能的特征名称"""
+        return list(self.feature_metadata.keys())
+    
+    def _init_windows(self):
+        """初始化滑动窗口数据结构"""
+        self.session_temporal_data = {}  # {session_id: {window_type: deque}}
+        
     def _calculate_window_features(self, window_packets, window_type, window_size):
         """
         计算单个窗口的时序特征
@@ -266,6 +201,59 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         
         return features
     
+    def _calculate_burst_features(self, timestamps, inter_arrivals, burst_threshold=0.1):
+        """
+        计算突发特征
+        
+        参数:
+            timestamps: 时间戳列表
+            inter_arrivals: 到达间隔列表
+            burst_threshold: 突发阈值(秒)
+            
+        返回:
+            突发特征字典
+        """
+        if not inter_arrivals:
+            return {"burst_count": 0, "burst_duration_mean": 0}
+        
+        # 识别突发: 连续的小间隔包
+        bursts = []
+        current_burst = [timestamps[0]]
+        
+        for i, interval in enumerate(inter_arrivals):
+            if interval <= burst_threshold:
+                # 属于当前突发
+                current_burst.append(timestamps[i+1])
+            else:
+                # 突发结束
+                if len(current_burst) > 1:  # 至少2个包才算突发
+                    bursts.append({
+                        "start": current_burst[0],
+                        "end": current_burst[-1],
+                        "duration": current_burst[-1] - current_burst[0],
+                        "packet_count": len(current_burst)
+                    })
+                # 开始新突发
+                current_burst = [timestamps[i+1]]
+        
+        # 处理最后一个突发
+        if len(current_burst) > 1:
+            bursts.append({
+                "start": current_burst[0],
+                "end": current_burst[-1],
+                "duration": current_burst[-1] - current_burst[0],
+                "packet_count": len(current_burst)
+            })
+        
+        # 计算突发特征
+        burst_count = len(bursts)
+        burst_duration_mean = np.mean([b["duration"] for b in bursts]) if bursts else 0
+        
+        return {
+            "burst_count": burst_count,
+            "burst_duration_mean": burst_duration_mean
+        }
+    
     def _calculate_trend_features(self, session_id):
         """
         计算跨窗口的趋势特征
@@ -299,47 +287,84 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         short_packets = self.session_temporal_data[session_id].get("short", deque())
         medium_packets = self.session_temporal_data[session_id].get("medium", deque())
         
-        if len(short_packets) < 2 or len(medium_packets) < 2:
+        if len(short_packets) == 0 or len(medium_packets) == 0:
             return features
         
         # 计算短窗口特征
         short_features = self._calculate_window_features(
-            short_packets, "short", short_window["size"]
+            list(short_packets), "short", short_window["size"]
         )
         
         # 计算中窗口特征
         medium_features = self._calculate_window_features(
-            medium_packets, "medium", medium_window["size"]
+            list(medium_packets), "medium", medium_window["size"]
         )
         
-        # 计算速率趋势（中窗口 / 短窗口 - 1）
-        if short_features["short_window_packet_rate"] > 0:
-            features["packet_rate_trend"] = (
-                medium_features["medium_window_packet_rate"] / 
-                short_features["short_window_packet_rate"] - 1
-            )
+        # 计算趋势（中窗口 - 短窗口）
+        features["packet_rate_trend"] = (
+            medium_features["medium_window_packet_rate"] - 
+            short_features["short_window_packet_rate"]
+        )
         
-        if short_features["short_window_byte_rate"] > 0:
-            features["byte_rate_trend"] = (
-                medium_features["medium_window_byte_rate"] / 
-                short_features["short_window_byte_rate"] - 1
-            )
+        features["byte_rate_trend"] = (
+            medium_features["medium_window_byte_rate"] - 
+            short_features["short_window_byte_rate"]
+        )
         
-        # 计算数据包大小变化率
+        # 计算变化率
         if short_features["short_window_packet_size_mean"] > 0:
-            features["packet_size_variation"] = (
-                medium_features["medium_window_packet_size_mean"] / 
-                short_features["short_window_packet_size_mean"] - 1
-            )
+            features["packet_size_variation"] = abs(
+                medium_features["medium_window_packet_size_mean"] - 
+                short_features["short_window_packet_size_mean"]
+            ) / short_features["short_window_packet_size_mean"]
         
-        # 计算到达间隔变化率
         if short_features["short_window_inter_arrival_mean"] > 0:
-            features["inter_arrival_variation"] = (
-                medium_features["medium_window_inter_arrival_mean"] / 
-                short_features["short_window_inter_arrival_mean"] - 1
-            )
+            features["inter_arrival_variation"] = abs(
+                medium_features["medium_window_inter_arrival_mean"] - 
+                short_features["short_window_inter_arrival_mean"]
+            ) / short_features["short_window_inter_arrival_mean"]
         
         return features
+    
+    def _get_window_packets(self, session_id, window_type, new_packet):
+        """
+        获取指定窗口内的数据包
+        
+        参数:
+            session_id: 会话ID
+            window_type: 窗口类型
+            new_packet: 新数据包
+            
+        返回:
+            窗口内的数据包列表
+        """
+        # 确保会话的时序数据已初始化
+        if session_id not in self.session_temporal_data:
+            self.session_temporal_data[session_id] = {}
+            
+        if window_type not in self.session_temporal_data[session_id]:
+            self.session_temporal_data[session_id][window_type] = deque()
+            
+        window_packets = self.session_temporal_data[session_id][window_type]
+        
+        # 添加新数据包
+        if new_packet:
+            window_packets.append(new_packet)
+            
+        # 获取窗口配置
+        window_config = self.window_configs[window_type]
+        window_size = window_config["size"]
+        
+        # 移除超出窗口范围的数据包
+        if new_packet and "timestamp" in new_packet:
+            current_time = new_packet["timestamp"]
+            expire_time = current_time - window_size
+            
+            # 移除过期的数据包
+            while window_packets and window_packets[0].get("timestamp", 0) < expire_time:
+                window_packets.popleft()
+        
+        return list(window_packets)
     
     def extract_features(self, packet, session):
         """
@@ -355,6 +380,9 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         features = {}
         
         if not packet or not session:
+            # 返回零值特征而不是空特征
+            for feature_name in self.get_enabled_features():
+                features[feature_name] = 0
             return features
             
         session_id = session.session_id
@@ -392,6 +420,11 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
                 if feature_name in relevant_features:
                     features[feature_name] = value
         
+        # 确保所有启用的特征都有值
+        for feature_name in relevant_features:
+            if feature_name not in features:
+                features[feature_name] = 0
+                
         return features
     
     def extract_features_from_session(self, session):
@@ -407,6 +440,9 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
         features = {}
         
         if not session or not session.packets or len(session.packets) == 0:
+            # 返回零值特征而不是空特征
+            for feature_name in self.get_enabled_features():
+                features[feature_name] = 0
             return features
             
         session_id = session.session_id
@@ -428,17 +464,28 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
             if window_type not in self.session_temporal_data[session_id]:
                 self.session_temporal_data[session_id][window_type] = deque()
             
-            # 添加所有数据包（会自动过滤窗口外的）
-            for packet in session.packets:
-                self._get_window_packets(session_id, window_type, packet)
-            
-            # 获取窗口内的数据包
             window_packets = self.session_temporal_data[session_id][window_type]
-            window_size = self.window_configs[window_type]["size"]
+            
+            # 添加所有数据包到窗口
+            for packet in session.packets:
+                window_packets.append(packet)
+            
+            # 获取窗口配置
+            window_config = self.window_configs[window_type]
+            window_size = window_config["size"]
+            
+            # 移除超出窗口范围的数据包（基于最后一个包的时间）
+            if session.packets and "timestamp" in session.packets[-1]:
+                current_time = session.packets[-1]["timestamp"]
+                expire_time = current_time - window_size
+                
+                # 移除过期的数据包
+                while window_packets and window_packets[0].get("timestamp", 0) < expire_time:
+                    window_packets.popleft()
             
             # 计算窗口特征
             window_features = self._calculate_window_features(
-                window_packets, window_type, window_size
+                list(window_packets), window_type, window_size
             )
             
             # 只保留相关的特征
@@ -456,80 +503,9 @@ class TemporalFeatureExtractor(BaseFeatureExtractor):
                 if feature_name in relevant_features:
                     features[feature_name] = value
         
+        # 确保所有启用的特征都有值
+        for feature_name in relevant_features:
+            if feature_name not in features:
+                features[feature_name] = 0
+                
         return features
-    
-    def cleanup_old_sessions(self, max_age=3600):
-        """
-        清理旧会话的时序数据
-        
-        参数:
-            max_age: 会话最大保留时间(秒)，默认1小时
-        """
-        current_time = time.time()
-        old_sessions = []
-        
-        # 找出旧会话
-        for session_id, window_data in self.session_temporal_data.items():
-            # 检查会话中最新的数据包时间
-            latest_time = 0
-            for window_packets in window_data.values():
-                if window_packets:
-                    packet_times = [p.get("timestamp", 0) for p in window_packets]
-                    if packet_times:
-                        current_latest = max(packet_times)
-                        if current_latest > latest_time:
-                            latest_time = current_latest
-            
-            # 如果会话超过max_age没有活动，标记为旧会话
-            if current_time - latest_time > max_age:
-                old_sessions.append(session_id)
-        
-        # 清理旧会话
-        for session_id in old_sessions:
-            del self.session_temporal_data[session_id]
-        
-        if old_sessions:
-            self.logger.debug(f"已清理 {len(old_sessions)} 个旧会话的时序数据")
-    
-    def start(self):
-        """启动时序特征提取器，包括定期清理任务"""
-        if self._is_running:
-            self.logger.warning("时序特征提取器已在运行中")
-            return
-            
-        super().start()
-        
-        # 启动定期清理线程
-        self._stop_event = threading.Event()
-        
-        def cleanup_loop():
-            while not self._stop_event.is_set():
-                self.cleanup_old_sessions()
-                # 每30分钟清理一次，但可以被中断
-                self._stop_event.wait(timeout=1800)  # 30分钟 = 1800秒
-        
-        self._processing_thread = threading.Thread(target=cleanup_loop, daemon=True)
-        self._processing_thread.start()
-        
-        self.logger.info("时序特征提取器已启动")
-    
-    def stop(self):
-        """停止时序特征提取器"""
-        if not self._is_running:
-            return
-            
-        # 设置停止事件
-        if hasattr(self, '_stop_event'):
-            self._stop_event.set()
-            
-        # 停止清理线程
-        if self._processing_thread and self._processing_thread.is_alive():
-            self._processing_thread.join(timeout=5)
-            if self._processing_thread.is_alive():
-                self.logger.warning("时序特征提取器清理线程未能正常终止")
-        
-        # 清空时序数据
-        self.session_temporal_data.clear()
-        
-        super().stop()
-        self.logger.info("时序特征提取器已停止")

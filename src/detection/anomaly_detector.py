@@ -4,33 +4,58 @@ import threading
 import logging
 from queue import Queue, Empty
 import numpy as np
+from typing import Dict, Any, Optional, Tuple
 from src.system.base_component import BaseComponent
 from src.utils.logger import get_logger
 from src.models.model_factory import ModelFactory
-from src.models.model_selector import ModelSelector
 from src.config.config_manager import ConfigManager
 from src.features.protocol_specs import get_protocol_spec
 
 class AnomalyDetector(BaseComponent):
     """异常检测器，负责使用模型或规则检测网络流量异常"""
     
-    def __init__(self, stat_extractor=None, temporal_extractor=None, config=None):
+    def __init__(self, config: Optional[ConfigManager] = None):
+        """
+        初始化异常检测器
+        
+        参数:
+            config: 配置管理器实例
+        """
         super().__init__()
         self.logger = get_logger("anomaly_detector")
+        
+        # 初始化配置
         self.config = config or ConfigManager()
         
-        # 特征提取器
-        self.stat_extractor = stat_extractor
-        self.temporal_extractor = temporal_extractor
+        # 检测模式配置
+        self.detection_mode = self.config.get("detection.mode", "hybrid")  # hybrid, model_only, rule_only
         
-        # 模型相关组件
-        self.model_factory = ModelFactory()
-        self.model_selector = ModelSelector()
-        self.models = {}  # 按协议缓存模型: {protocol_num: model}
+        # 检测阈值配置
+        self.default_threshold = self.config.get("detection.threshold", 0.7)
+        self.protocol_thresholds = self.config.get("detection.protocol_thresholds", {})
         
-        # 检测阈值
-        self.default_threshold = self.config.get("model.threshold", 0.7)
-        self.protocol_thresholds = self.config.get("model.protocol_thresholds", {})
+        # 初始化模型工厂
+        self.model_factory = ModelFactory(config=self.config)
+        
+        # 模型兼容的特征名称列表（与模型训练时一致）
+        self.model_compatible_features = [
+            "packet_count", "byte_count", "flow_duration", "avg_packet_size",
+            "std_packet_size", "min_packet_size", "max_packet_size",
+            "bytes_per_second", "packets_per_second",
+            "tcp_syn_count", "tcp_ack_count", "tcp_fin_count", "tcp_rst_count",
+            "tcp_flag_ratio", "payload_entropy"
+        ]
+        
+        # 特征提取器（用于特征一致性检查）
+        from src.features.stat_extractor import StatFeatureExtractor
+        from src.features.temporal_extractor import TemporalFeatureExtractor
+        self.stat_extractor = StatFeatureExtractor(config=self.config)
+        self.temporal_extractor = TemporalFeatureExtractor(config=self.config)
+        
+        # 存储协议对应的模型
+        self.models = {}
+        
+        self.logger.info("异常检测器初始化完成")
         
         # 特征队列（从traffic_analyzer接收）
         self.features_queue = Queue(maxsize=1000)
@@ -48,9 +73,6 @@ class AnomalyDetector(BaseComponent):
             "icmp_flood_threshold": 10,  # ICMP包频率阈值
             "tcp_flags": ["SYN+FIN", "SYN+RST", "FIN+URG+PSH"]  # 异常TCP标志
         })
-        
-        # 协议特定计数器（用于规则检测）
-        self.protocol_counters = {}
         
     def set_features_queue(self, queue):
         """设置特征队列（从traffic_analyzer接收）"""
@@ -165,11 +187,30 @@ class AnomalyDetector(BaseComponent):
             self.logger.error(f"特征转换失败: {str(e)}")
             return None
         
-        # 获取模型
-        model = self._get_protocol_model(protocol_num)
-        if not model:
-            # 模型不存在，使用规则检测
-            return self._rule_based_detection(features)
+        # 检查特征数量是否匹配
+        expected_features_count = None
+        if hasattr(model, 'model') and hasattr(model.model, 'n_features_in_'):
+            expected_features_count = model.model.n_features_in_
+        elif hasattr(model, 'n_features_in_'):
+            expected_features_count = model.n_features_in_
+        
+        if expected_features_count is not None:
+            actual_features_count = input_data.shape[1]
+            if actual_features_count != expected_features_count:
+                self.logger.warning(
+                    f"特征数量不匹配，模型期望: {expected_features_count}, 实际: {actual_features_count}"
+                )
+                # 尝试调整特征数量
+                if actual_features_count > expected_features_count:
+                    self.logger.info(f"截取前{expected_features_count}个特征")
+                    input_data = input_data[:, :expected_features_count]
+                else:
+                    # 特征数量不足，使用规则检测
+                    self.logger.warning(f"特征数量不足，补充默认值后继续预测")
+                    padding = np.zeros((1, expected_features_count - actual_features_count))
+                    input_data = np.hstack([input_data, padding])
+        
+        return input_data
         
         # 模型预测
         try:
@@ -188,6 +229,11 @@ class AnomalyDetector(BaseComponent):
             
             # 确定异常类型（如果模型支持）
             anomaly_type = "unknown_anomaly"
+            if hasattr(model, "predict_anomaly_type"):
+                try:
+                    anomaly_type = model.predict_anomaly_type(input_data)[0]
+                except:
+                    pass
             
             return {
                 "anomaly_score": anomaly_score,

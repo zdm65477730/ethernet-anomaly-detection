@@ -1,19 +1,21 @@
 import time
 import threading
 import traceback
-from typing import Dict, List, Optional, Tuple
+from typing import List, Dict, Optional, Any
 from src.system.base_component import BaseComponent
-from src.utils.logger import get_logger
 from src.config.config_manager import ConfigManager
+from src.utils.logger import get_logger
 from src.monitoring.monitor import SystemMonitor
 from src.capture.packet_capture import PacketCapture
 from src.capture.session_tracker import SessionTracker
 from src.capture.traffic_analyzer import TrafficAnalyzer
+from src.features.stat_extractor import StatFeatureExtractor
+from src.features.temporal_extractor import TemporalFeatureExtractor
+from src.models.model_factory import ModelFactory
+from src.models.model_selector import ModelSelector
 from src.detection.anomaly_detector import AnomalyDetector
 from src.detection.alert_manager import AlertManager
 from src.detection.feedback_processor import FeedbackProcessor
-from src.models.model_factory import ModelFactory
-from src.models.model_selector import ModelSelector
 
 class SystemManager(BaseComponent):
     """系统管理器，负责初始化、启动、停止所有组件，并监控组件状态"""
@@ -166,10 +168,15 @@ class SystemManager(BaseComponent):
                 # 设置网络接口和过滤规则
                 interface = self.config.get("network.interface")
                 filter_rule = self.config.get("network.filter")
+                offline_file = self.config.get("network.offline_file")
+                
                 if interface:
                     component.set_interface(interface)
                 if filter_rule:
                     component.set_filter(filter_rule)
+                if offline_file:
+                    component.set_offline_file(offline_file)
+                    
                 component.start()
             elif component_name == "traffic_analyzer":
                 component.start(session_tracker=self._components["session_tracker"])
@@ -208,6 +215,21 @@ class SystemManager(BaseComponent):
                 
             self.logger.debug(f"调用组件 {component_name} 的stop方法")
             component.stop()
+            
+            # 对于监控组件，等待其线程结束
+            if component_name == "monitor" and isinstance(component, SystemMonitor):
+                self.logger.debug("检测到监控组件，准备等待线程结束")
+                monitor_thread = component._monitor_thread
+                if monitor_thread and monitor_thread.is_alive():
+                    self.logger.debug(f"等待监控组件线程结束，线程ID: {monitor_thread.ident}")
+                    monitor_thread.join(timeout=10)  # 增加等待时间到10秒
+                    if monitor_thread.is_alive():
+                        self.logger.warning("监控组件线程未能正常终止")
+                    else:
+                        self.logger.debug("监控组件线程已正常终止")
+                else:
+                    self.logger.debug("监控组件线程不存在或已停止")
+            
             self.logger.info(f"组件 {component_name} 已停止")
             return True
         except Exception as e:
@@ -222,25 +244,31 @@ class SystemManager(BaseComponent):
         """监控组件运行状态"""
         while self.is_running:
             try:
+                # 如果系统正在停止过程中，不尝试重启组件
+                if self._stopping:
+                    self.logger.debug("系统正在停止过程中，跳过组件重启")
+                    continue
+                
                 # 检查所有组件状态
                 for name, component in self._components.items():
                     # 跳过不需要监控的组件
-                    if name in ["config_manager"]:
+                    if name == "config_manager":
                         continue
                         
                     # 检查组件是否运行正常
                     if component.is_running:
                         continue
                         
-                    # 如果系统正在停止过程中，不尝试重启组件
-                    if self._stopping:
-                        continue
-                        
                     status = component.get_status()
                     self.logger.warning(f"组件 {name} 未运行，状态: {status}")
                     
                     # 尝试重启组件
-                    self._attempt_restart(name)
+                    self.logger.debug(f"尝试重启组件: {name}")
+                    success = self._attempt_restart(name)
+                    if success:
+                        self.logger.info(f"组件 {name} 重启成功")
+                    else:
+                        self.logger.error(f"组件 {name} 重启失败")
                 
                 time.sleep(self._monitor_interval)
                 
@@ -290,31 +318,30 @@ class SystemManager(BaseComponent):
             self.logger.warning(f"未知组件 {component_name}，无法重启")
             return False
     
-    def start(self, interface: Optional[str] = None, bpf_filter: Optional[str] = None) -> bool:
-        """
-        启动系统管理器和所有组件
-        
-        Args:
-            interface: 网络接口
-            bpf_filter: BPF过滤规则
-            
-        Returns:
-            是否启动成功
-        """
+    def start(self, interface=None, bpf_filter=None, offline_file=None) -> bool:
+        """启动所有组件"""
         if self.is_running:
             self.logger.warning("系统已在运行中")
-            return False
+            return True
             
         try:
-            # 设置网络接口和过滤规则（如果提供）
+            # 如果提供了网络接口和过滤规则，则设置到packet_capture组件
             if interface:
-                self.config.set("network.interface", interface)
+                packet_capture = self._components.get("packet_capture")
+                if packet_capture and hasattr(packet_capture, 'set_interface'):
+                    packet_capture.set_interface(interface)
             if bpf_filter:
-                self.config.set("network.bpf_filter", bpf_filter)
+                packet_capture = self._components.get("packet_capture")
+                if packet_capture and hasattr(packet_capture, 'set_filter'):
+                    packet_capture.set_filter(bpf_filter)
+            if offline_file:
+                packet_capture = self._components.get("packet_capture")
+                if packet_capture and hasattr(packet_capture, 'set_offline_file'):
+                    packet_capture.set_offline_file(offline_file)
                 
             # 确定组件启动顺序
             start_order = self._get_component_start_order()
-            self.logger.debug(f"组件启动顺序: {start_order}")
+            self.logger.info(f"组件启动顺序: {start_order}")
             
             # 按顺序启动所有组件
             all_success = True
@@ -399,7 +426,7 @@ class SystemManager(BaseComponent):
         """获取所有组件"""
         return self._components.copy()
 
-    def get_system_status(self) -> Dict[str, any]:
+    def get_system_status(self) -> Dict[str, Any]:
         """获取整个系统的状态信息"""
         system_status = super().get_status()
         

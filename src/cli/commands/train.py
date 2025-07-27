@@ -1,28 +1,70 @@
 import os
-import typer
+import sys
+
+# 在绝对最早期设置环境变量
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# 在绝对最早期重定向stderr
+class DevNull:
+    def write(self, msg):
+        # 检查是否包含TensorFlow相关关键词
+        tf_keywords = [
+            'tensorflow', 'cuda', 'cudnn', 'cufft', 'cublas', 
+            'absl', 'computation_placer', 'oneDNN', 'stream_executor'
+        ]
+        
+        msg_lower = str(msg).lower()
+        # 如果包含任何TF关键词，直接丢弃
+        for keyword in tf_keywords:
+            if keyword in msg_lower:
+                return
+        # 否则正常输出到原始stderr
+        sys.__stderr__.write(msg)
+    
+    def flush(self):
+        sys.__stderr__.flush()
+
+# 重定向stderr到我们的过滤器
+sys.stderr = DevNull()
+
+# 导入其他模块
+import json
 import time
-from typing import Optional, List
+import logging
+import signal
+from typing import Optional
+import typer
+import numpy as np
+import pandas as pd
+
+# 设置Python日志级别
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+logging.getLogger('absl').setLevel(logging.ERROR)
+
+from src.data.data_processor import DataProcessor
+from src.data.data_storage import DataStorage
+from src.models.model_factory import ModelFactory
+from src.models.model_selector import ModelSelector
+from src.training.model_trainer import ModelTrainer
+from src.training.model_evaluator import ModelEvaluator
+from src.training.feedback_optimizer import FeedbackOptimizer
+from src.training.continuous_trainer import ContinuousTrainer
+from src.detection.feedback_processor import FeedbackProcessor
+from src.training.automl_trainer import AutoMLTrainer
+from src.config.config_manager import ConfigManager
+from src.utils.logger import setup_logging
 from src.cli.utils import (
-    print_success,
-    print_error,
     print_info,
+    print_error,
+    print_success,
     print_warning,
     confirm
 )
-from src.training.continuous_trainer import ContinuousTrainer
-from src.training.model_trainer import ModelTrainer
-from src.training.feedback_optimizer import FeedbackOptimizer
-from src.training.automl_trainer import AutoMLTrainer
-from src.data.data_processor import DataProcessor
-from src.models.model_factory import ModelFactory
-from src.config.config_manager import ConfigManager
-from src.utils.logger import setup_logging
 
 # 创建子命令
-train_app = typer.Typer(
-    name="train",
-    help="模型训练相关操作"
-)
+train_app = typer.Typer(help="模型训练相关命令")
+
 
 @train_app.command(name="once", help="执行单次模型训练")
 def train_once(
@@ -33,6 +75,10 @@ def train_once(
     data_path: Optional[str] = typer.Option(
         None, "--data", "-d",
         help="训练数据路径，不指定则使用默认数据目录"
+    ),
+    test_data: Optional[str] = typer.Option(
+        None, "--test-data", "-td",
+        help="测试数据路径，不指定则使用默认测试数据目录"
     ),
     test_size: float = typer.Option(
         0.2, "--test-size", "-t",
@@ -61,7 +107,14 @@ def train_once(
 ):
     """执行单次模型训练"""
     # 配置日志
-    setup_logging(log_level=log_level)
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR
+    }
+    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    setup_logging(log_level=actual_log_level)
     
     # 加载配置
     try:
@@ -73,6 +126,8 @@ def train_once(
     # 确定交叉验证折数
     if cv_folds is None:
         cv_folds = config.get("training.cross_validation_folds", 5)
+    else:
+        cv_folds = int(cv_folds)  # 确保是整数类型
     
     # 初始化组件
     data_processor = DataProcessor()
@@ -81,6 +136,19 @@ def train_once(
     # 确定数据路径
     if not data_path:
         data_path = os.path.join(config.get("data.processed_dir", "data/processed"))
+    
+    # 确定测试数据路径
+    if not test_data:
+        test_dir = config.get("data.test_dir", "data/test")
+    else:
+        test_dir = test_data
+    
+    # 确保路径不为None
+    if data_path is None:
+        data_path = "data/processed"
+        
+    if test_dir is None:
+        test_dir = "data/test"
     
     if not os.path.exists(data_path):
         print_error(f"数据路径不存在: {data_path}")
@@ -98,6 +166,23 @@ def train_once(
     try:
         X, y = data_processor.load_processed_data(data_path)
         print_info(f"加载完成，样本数: {len(X)}, 特征数: {X.shape[1] if hasattr(X, 'shape') else 'unknown'}")
+        
+        # 预处理训练数据
+        # 只使用模型兼容的特征
+        model_compatible_features, _ = data_processor.get_model_compatible_features()
+        available_features = [f for f in model_compatible_features if f in X.columns]
+        X_filtered = X[available_features]
+        X_processed = data_processor.preprocess_features(X_filtered, fit=True)
+        
+        # 更新X和y为处理后的数据
+        X = X_processed
+        
+        # 如果没有测试数据，使用训练数据的一部分
+        if not os.path.exists(test_dir) or len(os.listdir(test_dir)) == 0:
+            print_warning(f"测试数据目录 {test_dir} 不存在或为空，使用训练数据的一部分作为测试集")
+            _, X_test, _, y_test = data_processor.split_train_test(X, y, test_size=0.2)
+            print_info(f"已从训练数据拆分出 {len(X_test)} 个测试样本")
+            
     except Exception as e:
         print_error(f"加载数据失败: {str(e)}")
         raise typer.Exit(code=1)
@@ -116,14 +201,18 @@ def train_once(
             X=X,
             y=y,
             test_size=test_size,
-            cv_folds=cv_folds,
+            cv_folds=cv_folds or 5,  # 确保cv_folds是一个整数，默认值为5
             output_dir=output_dir
         )
+        
         
         print_success("模型训练完成!")
         print_info("评估指标:")
         for metric, value in metrics.items():
-            print(f"  {metric}: {value:.4f}")
+            if isinstance(value, (int, float)):
+                print(f"  {metric}: {value:.4f}")
+            else:
+                print(f"  {metric}: {value}")
         print_info(f"详细报告已保存至: {report_path}")
         
         # 如果启用了自动优化
@@ -140,6 +229,24 @@ def train_once(
     except Exception as e:
         print_error(f"训练失败: {str(e)}")
         raise typer.Exit(code=1)
+
+def _create_continuous_training_pid_file(pid: int):
+    """创建持续训练PID文件"""
+    pid_file = "continuous_training.pid"
+    try:
+        with open(pid_file, "w") as f:
+            f.write(str(pid))
+    except Exception as e:
+        print_warning(f"创建持续训练PID文件失败: {e}")
+
+def _remove_continuous_training_pid_file():
+    """删除持续训练PID文件"""
+    pid_file = "continuous_training.pid"
+    try:
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except Exception as e:
+        print_warning(f"删除持续训练PID文件失败: {e}")
 
 @train_app.command(name="continuous", help="启动持续训练模式")
 def train_continuous(
@@ -166,7 +273,14 @@ def train_continuous(
 ):
     """启动持续训练模式，定期检查新数据并增量更新模型"""
     # 初始化日志
-    setup_logging(log_level=log_level)
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR
+    }
+    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    setup_logging(log_level=actual_log_level)
     
     # 加载配置
     try:
@@ -186,10 +300,19 @@ def train_continuous(
             pid = os.fork()
             if pid > 0:
                 print_success(f"持续训练已在后台启动 (PID: {pid})")
+                # 创建PID文件记录后台进程ID
+                _create_continuous_training_pid_file(pid)
                 raise typer.Exit(code=0)
+            else:
+                # 子进程中设置新的进程组，以便可以独立接收信号
+                os.setsid()
         except OSError as e:
             print_error(f"无法在后台运行: {str(e)}")
             raise typer.Exit(code=1)
+    
+    # 如果不是后台运行，也创建PID文件
+    if not background:
+        _create_continuous_training_pid_file(os.getpid())
     
     # 初始化持续训练器
     trainer = ContinuousTrainer(config=config)
@@ -202,19 +325,32 @@ def train_continuous(
             min_samples=min_samples
         )
         
+        # 注册信号处理器以便优雅停止
+        def signal_handler(sig, frame):
+            print_info("\n收到停止信号，正在停止持续训练...")
+            trainer.stop()
+            _remove_continuous_training_pid_file()
+            print_success("持续训练已停止")
+            os._exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
         # 保持运行
         try:
             while True:
-                time.sleep(3600)
+                time.sleep(1)  # 更短的睡眠时间，以便更快响应信号
         except KeyboardInterrupt:
             print_info("\n用户中断，正在停止持续训练...")
             trainer.stop()
         
+        _remove_continuous_training_pid_file()
         print_success("持续训练已停止")
         
     except Exception as e:
         print_error(f"持续训练失败: {str(e)}")
         trainer.stop()
+        _remove_continuous_training_pid_file()
         raise typer.Exit(code=1)
 
 @train_app.command(name="evaluate", help="评估现有模型")
@@ -242,9 +378,23 @@ def evaluate_model(
     auto_optimize: bool = typer.Option(
         False, "--auto-optimize", "-a",
         help="评估后自动优化模型和特征工程"
+    ),
+    log_level: str = typer.Option(
+        "INFO", "--log-level", "-l",
+        help="日志级别 (DEBUG, INFO, WARNING, ERROR)"
     )
 ):
-    """评估现有模型性能"""
+    """评估已有模型"""
+    # 配置日志
+    log_level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR
+    }
+    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
+    setup_logging(log_level=actual_log_level)
+    
     # 加载配置
     try:
         config = ConfigManager(config_dir=config_dir)
@@ -278,19 +428,64 @@ def evaluate_model(
             X_test, y_test = data_processor.load_processed_data(test_data)
         else:
             test_dir = config.get("data.test_dir", "data/test")
-            if not os.path.exists(test_dir):
-                print_warning(f"测试数据目录 {test_dir} 不存在，使用训练数据的一部分作为测试集")
+            X_test, y_test = None, None
+            if os.path.exists(test_dir):
+                try:
+                    X_test, y_test = data_processor.load_processed_data(test_dir)
+                except Exception as e:
+                    print_warning(f"加载测试数据失败: {e}")
+            
+            # 如果没有测试数据或加载失败，使用训练数据的一部分
+            if X_test is None or len(X_test) == 0:
+                print_warning(f"测试数据目录 {test_dir} 不存在或为空，使用训练数据的一部分作为测试集")
                 train_dir = config.get("data.processed_dir", "data/processed")
                 X, y = data_processor.load_processed_data(train_dir)
-                X_test, y_test = data_processor.split_train_test(X, y, test_size=0.2)
-            else:
-                X_test, y_test = data_processor.load_processed_data(test_dir)
+                _, X_test, _, y_test = data_processor.split_train_test(X, y, test_size=0.2)
+        
+        if X_test is None or len(X_test) == 0:
+            print_error("没有可用的测试数据")
+            raise typer.Exit(code=1)
+            
+        # 对测试数据进行预处理
+        print_info(f"原始测试数据形状: {X_test.shape}")
+        # 先清理数据
+        X_test_cleaned = data_processor.clean_data(X_test)
+        print_info(f"清理后的测试数据形状: {X_test_cleaned.shape}")
+        
+        # 获取模型兼容的特征集
+        model_compatible_features, _ = data_processor.get_model_compatible_features()
+        available_features = [f for f in model_compatible_features if f in X_test_cleaned.columns]
+        
+        if len(available_features) != len(model_compatible_features):
+            print_warning(f"特征不完整，期望: {model_compatible_features}, 可用: {available_features}")
+        
+        # 只保留模型兼容的特征
+        X_test_filtered = X_test_cleaned[available_features]
+        X_test = data_processor.preprocess_features(X_test_filtered, fit=True)
+        print_info(f"预处理后的测试数据形状: {X_test.shape}")
+        
+        # 检查特征数量是否匹配
+        if hasattr(model, 'model') and hasattr(model.model, 'n_features_in_'):
+            expected_features_count = model.model.n_features_in_
+            actual_features_count = X_test.shape[1] if hasattr(X_test, 'shape') else len(X_test)
+            if actual_features_count != expected_features_count:
+                print_warning(f"特征数量不匹配，模型期望: {expected_features_count}, 实际: {actual_features_count}")
+                # 尝试调整特征数量
+                if actual_features_count > expected_features_count:
+                    print_info(f"截取前{expected_features_count}个特征")
+                    if hasattr(X_test, 'iloc'):
+                        X_test = X_test.iloc[:, :expected_features_count]
+                    else:
+                        X_test = X_test[:, :expected_features_count]
+                else:
+                    print_error(f"特征数量不足，无法进行评估")
+                    raise typer.Exit(code=1)
         
         print_info(f"已加载测试数据，样本数: {len(X_test)}")
     except Exception as e:
         print_error(f"加载测试数据失败: {str(e)}")
         raise typer.Exit(code=1)
-    
+
     # 执行评估
     try:
         metrics, report_path = trainer.evaluate_model(
@@ -304,7 +499,10 @@ def evaluate_model(
         print_success("模型评估完成!")
         print_info("评估指标:")
         for metric, value in metrics.items():
-            print(f"  {metric}: {value:.4f}")
+            if isinstance(value, (int, float)):
+                print(f"  {metric}: {value:.4f}")
+            else:
+                print(f"  {metric}: {value}")
         print_info(f"评估报告已保存至: {report_path}")
         
         # 如果启用了自动优化
@@ -331,6 +529,10 @@ def optimize_model(
     evaluation_report: Optional[str] = typer.Option(
         None, "--report", "-r",
         help="评估报告路径，不指定则使用最新报告"
+    ),
+    feedback_based: bool = typer.Option(
+        False, "--feedback-based", "-f",
+        help="基于反馈数据进行优化"
     ),
     config_dir: str = typer.Option(
         "config", "--config-dir", "-c",
@@ -359,7 +561,19 @@ def optimize_model(
     metrics = {}
     feature_importance = None
     
-    if evaluation_report:
+    if feedback_based:
+        # 基于反馈数据进行优化
+        try:
+            feedback_processor = FeedbackProcessor(config=config)
+            feedback_data = feedback_processor.get_feedback_data()
+            
+            # 从反馈数据中提取评估指标
+            metrics = feedback_processor.calculate_metrics_from_feedback()
+            print_info("已从反馈数据加载评估指标")
+        except Exception as e:
+            print_error(f"加载反馈数据失败: {str(e)}")
+            raise typer.Exit(code=1)
+    elif evaluation_report:
         # 从指定报告加载评估结果
         try:
             import json
@@ -373,7 +587,7 @@ def optimize_model(
             raise typer.Exit(code=1)
     else:
         # 需要用户提供评估指标
-        print_error("请提供评估报告路径或手动输入评估指标")
+        print_error("请提供评估报告路径或使用--feedback-based选项")
         raise typer.Exit(code=1)
     
     # 执行优化
@@ -384,24 +598,20 @@ def optimize_model(
             feature_importance=feature_importance
         )
         
+        # 输出优化结果
         print_success("优化完成!")
-        if optimization_result.get("recommendations"):
-            print_info("优化建议:")
-            for i, recommendation in enumerate(optimization_result["recommendations"], 1):
-                print(f"  {i}. {recommendation}")
-        
-        # 保存优化历史
-        optimizer.save_optimization_history()
-        print_info("优化历史已保存")
+        import json
+        print(json.dumps(optimization_result, indent=2, ensure_ascii=False))
         
     except Exception as e:
-        print_error(f"优化失败: {str(e)}")
+        print_error(f"优化过程中发生错误: {str(e)}")
         raise typer.Exit(code=1)
 
 def _perform_auto_optimization(model, model_type, metrics, config, model_factory):
     """执行自动优化的辅助函数"""
     try:
         optimizer = FeedbackOptimizer(config=config)
+        
         
         # 获取特征重要性
         feature_importance = None
@@ -515,7 +725,8 @@ def train_automl(
         print_error(f"AutoML训练失败: {str(e)}")
         raise typer.Exit(code=1)
 
-train_app.add_command(train_automl, name="automl")
+# 注册AutoML训练命令
+train_app.command(name="automl", help="启动AutoML自动化模型训练")(train_automl)
 
 def main():
     """模型训练相关操作"""

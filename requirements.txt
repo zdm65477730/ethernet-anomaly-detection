@@ -1,4 +1,4 @@
-# 核心依赖
+# 核心数据处理库
 python-dateutil>=2.8.2
 numpy>=1.21.5
 pandas>=1.3.5
@@ -9,28 +9,31 @@ joblib>=1.1.0
 pyyaml>=6.0
 python-dotenv>=0.20.0
 netifaces>=0.11.0
+
+# 数据可视化库
 matplotlib>=3.10
 seaborn>=0.13
 
-# 网络抓包与解析
+# 网络分析库
 scapy>=2.5.0
 dpkt>=1.9.7.2
 pcapy-ng>=1.0.9
 
-# 数据存储与处理
+# 数据存储和处理
 h5py>=3.6.0
 sqlalchemy>=1.4.31
 redis>=4.1.4
 
-# 日志与监控
+# 日志和监控
 python-json-logger>=2.0.2
 prometheus-client>=0.12.0
+psutil>=5.9.0
 
-# 告警通知
+# 通信和通知
 slack-sdk>=3.15.0
 
-# 深度学习
+# 深度学习框架
 tensorflow>=2.8.0
 
-# CLI工具
+# 命令行界面
 typer>=0.4.0

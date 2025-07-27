@@ -1,4 +1,8 @@
 import os
+# 设置TensorFlow日志级别以屏蔽不必要的信息
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 只显示错误和警告信息
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # 禁用oneDNN自定义操作
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -22,7 +26,7 @@ class LSTMModel(BaseModel):
             "learning_rate": 0.001
         }
         params = {**default_params,** kwargs}
-        super().__init__(model_type="lstm", **params)
+        super().__init__(**params)
         self.sequence_length = params["sequence_length"]
         self.model = None  # 延迟构建，需知道输入特征维度
 
@@ -205,7 +209,7 @@ class MLPModel(BaseModel):
             "learning_rate": 0.001
         }
         params = {** default_params, **kwargs}
-        super().__init__(model_type="mlp",** params)
+        super().__init__(** params)
         self.model = None  # 延迟构建，需知道输入特征维度
 
     def _build_model(self, n_features: int) -> tf.keras.Model:

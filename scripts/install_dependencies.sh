@@ -74,14 +74,21 @@ setup_python_env() {
     echo -e "${YELLOW}=== 配置Python环境 ===${NC}"
     
     # 检查项目根目录是否存在
-    if [ ! -d "../src" ]; then
-        echo -e "${RED}错误：未在项目根目录下运行脚本，请确保脚本位于scripts/目录${NC}"
+    if [ ! -d "./src" ] && [ ! -d "../src" ]; then
+        echo -e "${RED}错误：未在项目根目录下运行脚本，请确保在项目根目录执行此脚本${NC}"
         exit 1
     fi
     
+    # 确定项目根目录路径
+    if [ -d "./src" ]; then
+        PROJECT_ROOT="."
+    else
+        PROJECT_ROOT=".."
+    fi
+    
     # 创建虚拟环境
-    if [ ! -d "../venv" ]; then
-        python3 -m venv ../venv
+    if [ ! -d "$PROJECT_ROOT/venv" ]; then
+        python3 -m venv $PROJECT_ROOT/venv
         echo -e "${GREEN}虚拟环境创建成功${NC}"
     else
         echo -e "${YELLOW}虚拟环境已存在，跳过创建${NC}"
@@ -89,14 +96,15 @@ setup_python_env() {
     
     # 激活虚拟环境并安装依赖
     echo -e "${YELLOW}安装Python依赖包...${NC}"
-    source ../venv/bin/activate
+    source $PROJECT_ROOT/venv/bin/activate
     
     # 升级pip
     pip install --upgrade pip
     
     # 安装基础依赖
-    if [ -f "../requirements.txt" ]; then
-        pip install -r ../requirements.txt
+    # https://mirrors.aliyun.com/pypi/simple/ or https://pypi.tuna.tsinghua.edu.cn/simple
+    if [ -f "$PROJECT_ROOT/requirements.txt" ]; then
+        pip install -r $PROJECT_ROOT/requirements.txt -i https://mirrors.aliyun.com/pypi/simple
     else
         echo -e "${RED}错误：未找到requirements.txt${NC}"
         exit 1
@@ -106,8 +114,8 @@ setup_python_env() {
     read -p "是否安装GPU支持的依赖？(y/n，需要NVIDIA显卡) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        if [ -f "../requirements_gpu.txt" ]; then
-            pip install -r ../requirements_gpu.txt
+        if [ -f "$PROJECT_ROOT/requirements_gpu.txt" ]; then
+            pip install -r $PROJECT_ROOT/requirements_gpu.txt -i https://mirrors.aliyun.com/pypi/simple
             echo -e "${GREEN}GPU依赖安装完成${NC}"
         else
             echo -e "${YELLOW}未找到GPU依赖文件，跳过${NC}"
@@ -126,7 +134,7 @@ main() {
     echo -e "${GREEN}===== 所有依赖安装完成 =====${NC}"
     echo -e "${YELLOW}使用说明：${NC}"
     echo -e "1. 激活虚拟环境：source venv/bin/activate"
-    echo -e "2. 启动系统：python -m src.cli start"
+    echo -e "2. 启动系统：anomaly-detector start"
 }
 
 # 执行主函数

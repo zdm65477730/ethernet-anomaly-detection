@@ -18,13 +18,17 @@ class XGBoostModel(BaseModel):
             "max_depth": 5,
             "learning_rate": 0.1,
             "scale_pos_weight": 10,  # 平衡异常样本少的问题
-            "use_label_encoder": False,
             "eval_metric": "logloss"
         }
         # 合并默认参数与用户参数
         params = {**default_params,** kwargs}
-        super().__init__(model_type="xgboost", **params)
-        self.model = XGBClassifier(** params)
+        # 移除XGBoost不支持的参数
+        xgb_params = params.copy()
+        xgb_params.pop("model_type", None)
+        xgb_params.pop("use_label_encoder", None)
+        
+        super().__init__(**params)
+        self.model = XGBClassifier(**xgb_params)
 
     def fit(
         self,
@@ -100,8 +104,9 @@ class RandomForestModel(BaseModel):
             "class_weight": "balanced",
             "n_jobs": -1
         }
-        params = {** default_params, **kwargs}
-        super().__init__(model_type="random_forest",** params)
+        # 合并默认参数与用户参数
+        params = {**default_params, **kwargs}
+        super().__init__(**params)
         self.model = RandomForestClassifier(**params)
 
     def fit(
@@ -159,7 +164,7 @@ class LogisticRegressionModel(BaseModel):
             "warm_start": True  # 支持增量训练
         }
         params = {** default_params, **kwargs}
-        super().__init__(model_type="logistic_regression",** params)
+        super().__init__(** params)
         self.model = SGDClassifier(**params)
 
     def fit(

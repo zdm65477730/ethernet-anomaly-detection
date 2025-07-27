@@ -2,7 +2,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import roc_curve, precision_recall_curve, average_precision_score
+from sklearn.metrics import roc_curve, precision_recall_curve, average_precision_score, confusion_matrix
 from typing import Dict, List, Tuple, Optional, Union
 import pandas as pd
 
