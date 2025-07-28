@@ -602,6 +602,7 @@ def optimize_model(
         optimization_result = optimizer.optimize_based_on_evaluation(
             model_type=model_type,
             evaluation_metrics=metrics,
+            protocol=None,  # 添加缺失的protocol参数
             feature_importance=feature_importance
         )
         
@@ -632,6 +633,7 @@ def _perform_auto_optimization(model, model_type, metrics, config, model_factory
         optimization_result = optimizer.optimize_based_on_evaluation(
             model_type=model_type,
             evaluation_metrics=metrics,
+            protocol=None,  # 添加缺失的protocol参数
             feature_importance=feature_importance,
             model_factory=model_factory
         )
@@ -690,13 +692,53 @@ def train_self_driving(
         from src.training.self_driving_loop import SelfDrivingLoop
         self_driving_loop = SelfDrivingLoop(config=config)
         
+        # 创建PID文件
+        pid_file = "self_driving_training.pid"
+        try:
+            with open(pid_file, "w") as f:
+                f.write(str(os.getpid()))
+        except Exception as e:
+            print_warning(f"创建PID文件失败: {e}")
+        
+        # 注册信号处理器以便优雅停止
+        import signal
+        
+        def signal_handler(sig, frame):
+            print_info("\n收到停止信号，正在停止自驱动学习系统...")
+            self_driving_loop.stop_loop()
+            # 删除PID文件
+            try:
+                if os.path.exists(pid_file):
+                    os.remove(pid_file)
+            except Exception as e:
+                print_warning(f"删除PID文件失败: {e}")
+            print_success("自驱动学习系统已停止")
+            os._exit(0)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
         print_info("启动自驱动自学习闭环系统...")
+        print_info("按 Ctrl+C 可以停止系统")
         self_driving_loop.start_loop()
+        
+        # 正常退出时删除PID文件
+        try:
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+        except Exception as e:
+            print_warning(f"删除PID文件失败: {e}")
         
         print_success("自驱动学习系统已完成")
         
     except Exception as e:
         print_error(f"自驱动学习系统运行失败: {str(e)}")
+        # 出错时也尝试删除PID文件
+        try:
+            if os.path.exists(pid_file):
+                os.remove(pid_file)
+        except:
+            pass
         raise typer.Exit(code=1)
 
 def train_automl(
@@ -768,16 +810,48 @@ def train_automl(
             best_model = trainer.best_model_info
             if best_model:
                 print_info("最佳模型信息:")
-                print(f"  迭代轮次: {best_model['iteration']}")
-                print(f"  模型类型: {best_model['model_type']}")
-                print(f"  F1分数: {best_model['f1_score']:.4f}")
-                if best_model['metrics']:
+                iteration = best_model.get('iteration', 'N/A')
+                model_type = best_model.get('model_type', 'N/A')
+                f1_score = best_model.get('f1_score', 'N/A')
+                
+                print(f"  迭代轮次: {iteration}")
+                print(f"  模型类型: {model_type}")
+                
+                # 处理f1_score可能为列表的情况
+                if isinstance(f1_score, list):
+                    if f1_score:
+                        # 如果是列表，取第一个值或平均值
+                        if isinstance(f1_score[0], (int, float)):
+                            f1_value = f1_score[0] if len(f1_score) == 1 else sum(f1_score) / len(f1_score)
+                            print(f"  F1分数: {f1_value:.4f}")
+                        else:
+                            print(f"  F1分数: {f1_score}")
+                    else:
+                        print("  F1分数: N/A")
+                elif isinstance(f1_score, (int, float)):
+                    print(f"  F1分数: {f1_score:.4f}")
+                else:
+                    print(f"  F1分数: {f1_score}")
+                    
+                metrics = best_model.get('metrics', {})
+                if metrics:
                     print("  详细指标:")
-                    for metric, value in best_model['metrics'].items():
-                        print(f"    {metric}: {value:.4f}")
-        else:
-            print_error("启动AutoML训练失败")
-            raise typer.Exit(code=1)
+                    for metric, value in metrics.items():
+                        # 处理指标值可能为列表的情况
+                        if isinstance(value, list):
+                            if value and isinstance(value[0], (int, float)):
+                                # 如果是列表且元素是数值，取第一个值或平均值
+                                metric_value = value[0] if len(value) == 1 else sum(value) / len(value)
+                                print(f"    {metric}: {metric_value:.4f}")
+                            else:
+                                print(f"    {metric}: {value}")
+                        elif isinstance(value, (int, float)):
+                            print(f"    {metric}: {value:.4f}")
+                        else:
+                            print(f"    {metric}: {value}")
+            else:
+                print_error("启动AutoML训练失败")
+                raise typer.Exit(code=1)
             
     except Exception as e:
         print_error(f"AutoML训练失败: {str(e)}")

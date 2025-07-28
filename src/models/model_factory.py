@@ -2,9 +2,10 @@ import os
 import re
 import time
 import pickle
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from src.config.config_manager import ConfigManager
 from src.utils.logger import get_logger
+from src.system.base_component import BaseComponent
 from .base_model import BaseModel
 from .traditional_models import (
     XGBoostModel,
@@ -14,7 +15,7 @@ from .traditional_models import (
 from .deep_models import LSTMModel, MLPModel
 from .ensemble_model import EnsembleModel
 
-class ModelFactory:
+class ModelFactory(BaseComponent):
     """模型工厂，用于创建各种类型的模型实例"""
     
     # 模型类型到类的映射
@@ -28,12 +29,13 @@ class ModelFactory:
     
     def __init__(self, config: Optional[ConfigManager] = None):
         """初始化模型工厂"""
+        super().__init__()  # 初始化基类
         self.config = config or ConfigManager()
         self.logger = get_logger("model.factory")
         self._model_cache: Dict[str, BaseModel] = {}
         self.models_dir = self.config.get("training.models_dir", "models")
     
-    def get_status(self) -> Dict[str, any]:
+    def get_status(self) -> Dict[str, Any]:
         """
         获取组件状态信息
         

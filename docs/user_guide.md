@@ -119,13 +119,13 @@ anomaly-detector generate-test-data --count 5000
 
 ```bash
 # 单次训练
-anomaly-detector train once
+anomaly-detector train
 
 # 指定模型类型和数据进行训练
-anomaly-detector train once --model xgboost --data data/processed/model_features_data.csv
+anomaly-detector train --model xgboost --data data/processed/model_features_data.csv
 
 # 自动优化训练后的模型
-anomaly-detector train once --auto-optimize
+anomaly-detector train --auto-optimize
 ```
 
 ### 模型评估
@@ -344,14 +344,14 @@ anomaly-detector train --model xgboost --data data/test/model_features_data.csv
 anomaly-detector train continuous --background
 
 # 2. 运行系统一段时间以收集新的网络流量数据
-anomaly-detector start --interface eth0
+sudo /repo/ethernet-anomaly-detection/venv/bin/anomaly-detector start --interface eth0
 
 # 3. 等待系统运行一段时间后，检查新生成的检测结果并提交反馈
 anomaly-detector feedback submit --detection-id DETECTION_004 --is-anomaly --anomaly-type "Malware"
 anomaly-detector feedback submit --detection-id DETECTION_005 --is-anomaly
 
 # 4. 停止系统
-anomaly-detector stop
+sudo /repo/ethernet-anomaly-detection/venv/bin/anomaly-detector stop
 
 # 5. 基于新收集的反馈再次优化模型
 anomaly-detector train optimize --feedback-based
