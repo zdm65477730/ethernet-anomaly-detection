@@ -332,12 +332,63 @@ class ContinuousTrainer:
                 model_factory=self.model_factory
             )
             
-            # 记录优化建议
+            # 处理优化建议
             if optimization_result.get("recommendations"):
                 self.logger.info(
                     f"{protocol_name} {model_type} 模型优化建议: "
                     f"{'; '.join(optimization_result['recommendations'])}"
                 )
+                
+                # 检查是否有模型更换建议
+                for recommendation in optimization_result["recommendations"]:
+                    if recommendation.startswith("更换模型类型至"):
+                        new_model_type = recommendation.split("更换模型类型至")[1].strip()
+                        self.logger.info(
+                            f"检测到模型更换建议，将 {protocol_name} 的模型从 {model_type} 更换至 {new_model_type}"
+                        )
+                        
+                        try:
+                            # 加载历史数据和新数据
+                            X, y, protocol_labels, feature_names = self._load_training_data(
+                                protocol=protocol,
+                                time_threshold=self._get_data_time_threshold()
+                            )
+                            
+                            self.logger.info(
+                                f"为 {protocol_name} 加载训练数据: 总样本数 {len(X)}, "
+                                f"异常比例 {np.mean(y):.2%}"
+                            )
+                            
+                            # 训练新模型
+                            new_model, new_metrics, _ = self.base_trainer.train_new_model(
+                                model_type=new_model_type,
+                                X=X,
+                                y=y,
+                                protocol_labels=protocol_labels
+                            )
+                            
+                            # 保存新模型
+                            new_model_path = self.model_factory.save_model(new_model, new_model_type)
+                            self.logger.info(
+                                f"{protocol_name} 的新模型 {new_model_type} 已保存到: {new_model_path}"
+                            )
+                            
+                            # 更新模型选择器的性能记录
+                            self.model_selector.update_performance(
+                                protocol=protocol or "general",
+                                model_type=new_model_type,
+                                metrics=new_metrics
+                            )
+                            
+                            # 更新当前模型类型
+                            model_type = new_model_type
+                            model = new_model
+                            
+                        except Exception as e:
+                            self.logger.error(
+                                f"执行模型更换建议失败: {str(e)}", 
+                                exc_info=True
+                            )
             
             # 保存优化历史
             self.feedback_optimizer.save_optimization_history()

@@ -393,11 +393,11 @@ class DataProcessor:
         """
         预处理特征数据
         
-        Args:
+        参数:
             X: 原始特征数据
             fit: 是否拟合预处理管道
             
-        Returns:
+        返回:
             预处理后的特征数据
         """
         if X.empty:
@@ -414,12 +414,28 @@ class DataProcessor:
             return X
         
         # 否则使用预处理管道
-        if fit:
-            # 拟合并转换
-            X_processed = self._preprocessing_pipeline.fit_transform(X)
-        else:
-            # 仅转换
-            X_processed = self._preprocessing_pipeline.transform(X)
+        try:
+            if fit:
+                # 拟合并转换
+                X_processed = self._preprocessing_pipeline.fit_transform(X)
+            else:
+                # 仅转换
+                X_processed = self._preprocessing_pipeline.transform(X)
+        except Exception as e:
+            # 如果预处理管道未拟合且fit=False，则尝试使用模型兼容特征
+            if "not fitted yet" in str(e):
+                self.logger.warning("预处理管道未拟合，尝试使用模型兼容特征")
+                available_features = [f for f in model_features if f in X.columns]
+                if available_features:
+                    X_processed = X[available_features]
+                    self.logger.debug(f"使用 {len(available_features)} 个模型兼容特征")
+                    return X_processed
+                else:
+                    self.logger.warning("没有可用的模型兼容特征，返回原始数据")
+                    return X
+            else:
+                # 重新抛出其他异常
+                raise e
         
         # 获取特征名称
         feature_names = self._get_feature_names_after_preprocessing()

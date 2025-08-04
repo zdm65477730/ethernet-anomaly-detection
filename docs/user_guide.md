@@ -45,7 +45,7 @@ git clone https://github.com/zdm65477730/ethernet-anomaly-detection
 cd ethernet-anomaly-detection
 
 # 创建虚拟环境
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 
 # 安装依赖
@@ -99,6 +99,96 @@ anomaly-detector start --pcap-file /path/to/file.pcap
 anomaly-detector status
 ```
 
+## 离线检测
+
+除了实时检测外，系统还支持对本地数据文件进行离线异常检测。
+
+### 命令格式
+
+```bash
+anomaly-detector detect file [OPTIONS]
+```
+
+### 参数说明
+
+- `-d, --data-path PATH`：输入数据文件路径（CSV格式）[必需]
+- `-m, --model-path PATH`：模型文件路径（如果不指定，将自动选择最佳模型）
+- `-p, --protocol INTEGER`：协议类型（如果不指定，将尝试自动检测）
+- `-o, --output PATH`：输出结果文件路径（JSON格式）
+- `-c, --config-dir PATH`：配置文件目录 [默认: config]
+- `-l, --log-level TEXT`：日志级别 (DEBUG, INFO, WARNING, ERROR) [默认: INFO]
+- `-P, --parallel`：启用并行处理以提高效率
+- `-b, --batch-size INTEGER`：并行处理的批次大小 [默认: 1000]
+- `-w, --workers INTEGER`：并行工作进程数（0表示使用CPU核心数）[默认: 0]
+
+### 使用示例
+
+```bash
+# 使用自动选择的模型对TCP协议数据进行检测
+anomaly-detector detect file -d data/test_data.csv -p 6
+
+# 使用指定模型进行检测
+anomaly-detector detect file -d data/test_data.csv -m models/xgboost_20230101_f1_0_95.pkl
+
+# 指定输出文件路径
+anomaly-detector detect file -d data/test_data.csv -p 6 -o results/detection_results.json
+
+# 使用并行处理提高检测效率
+anomaly-detector detect file -d data/test_data.csv -p 6 -P -w 4 -b 500
+```
+
+### 输入数据格式
+
+输入数据文件应为CSV格式，包含网络流量特征。系统会自动处理特征预处理和标准化。
+
+### 输出结果
+
+检测结果将以JSON格式保存，包含以下信息：
+- 原始特征数据
+- 异常分数（0-1之间）
+- 是否为异常（布尔值）
+- 检测方法
+- 使用的阈值
+- 检测时间
+
+如果未指定输出文件路径，结果将默认保存到 `reports/detections/` 目录下。
+
+### 图形化报告
+
+系统支持生成图形化的检测报告，可以通过以下命令生成：
+
+```bash
+# 生成检测报告
+anomaly-detector report detection
+
+# 生成带图形化图表的检测报告
+anomaly-detector report generate --type detection --format html --visualize
+```
+
+图形化报告包含以下图表：
+1. 异常随时间分布图
+2. 协议分布饼图
+3. 异常分数分布直方图
+4. Top异常样本条形图
+
+报告将保存在 `reports/detections/` 目录下，包含一个HTML文件和多个PNG图表文件。
+
+## 性能优化
+
+### 并行处理
+
+对于大规模数据集，可以使用并行处理来提高检测效率：
+
+```bash
+# 使用默认并行设置（使用所有CPU核心）
+anomaly-detector detect file -d data/large_dataset.csv -m models/model.pkl -P
+
+# 指定并行工作进程数和批次大小
+anomaly-detector detect file -d data/large_dataset.csv -m models/model.pkl -P -w 4 -b 500
+```
+
+并行处理将数据分成多个批次，使用多个进程同时进行检测，可以显著提高处理速度。
+
 ## 模型训练与优化
 
 ### 数据生成
@@ -110,7 +200,7 @@ anomaly-detector status
 anomaly-detector generate-test-data
 
 # 生成指定数量的测试数据
-anomaly-detector generate-test-data --count 5000
+anomaly-detector generate-test-data --samples 5000
 ```
 
 ### 模型训练
@@ -181,6 +271,9 @@ anomaly-detector train automl --data data/processed/ --model xgboost
 启动自驱动闭环学习系统，系统会自动监测数据质量、训练模型、评估性能并根据反馈进行优化：
 
 ```bash
+# 拷贝要进行训练的数据集
+cp data/test/full_data.csv data/processed/test_data.csv
+
 # 启动自驱动闭环学习系统
 anomaly-detector train self-driving
 

@@ -227,7 +227,10 @@ def main(
                     model_type=model_type,
                     metrics=metrics,
                     config=config,
-                    model_factory=model_factory
+                    model_factory=model_factory,
+                    auto_replace=auto_replace,
+                    X_test=X_test,
+                    y_test=y_test
                 )
             
         except Exception as e:
@@ -277,14 +280,13 @@ def train_continuous(
 ):
     """启动持续训练模式，定期检查新数据并增量更新模型"""
     # 初始化日志
-    log_level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR
+    log_level_mapping = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40
     }
-    actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
-    setup_logging(log_level=actual_log_level)
+    setup_logging(log_level=log_level_mapping.get(log_level.upper(), 20))
     
     # 加载配置
     try:
@@ -357,24 +359,19 @@ def train_continuous(
         _remove_continuous_training_pid_file()
         raise typer.Exit(code=1)
 
-@train_app.command(name="evaluate", help="评估现有模型")
+@train_app.command(name="evaluate", help="评估模型性能")
 def evaluate_model(
-    ctx: typer.Context,
     model_path: Optional[str] = typer.Option(
         None, "--model", "-m",
         help="模型文件路径，不指定则使用最新模型"
     ),
     model_type: str = typer.Option(
         "xgboost", "--type", "-t",
-        help="模型类型 (xgboost, random_forest, lstm)"
+        help="模型类型 (xgboost, random_forest, lstm, mlp)"
     ),
     test_data: Optional[str] = typer.Option(
-        None, "--data", "-d",
-        help="测试数据路径，不指定则使用默认测试集"
-    ),
-    config_dir: str = typer.Option(
-        "config", "--config-dir", "-c",
-        help="配置文件目录"
+        None, "--test-data", "-d",
+        help="测试数据路径，不指定则使用默认测试数据"
     ),
     output: Optional[str] = typer.Option(
         None, "--output", "-o",
@@ -382,150 +379,162 @@ def evaluate_model(
     ),
     auto_optimize: bool = typer.Option(
         False, "--auto-optimize", "-a",
-        help="评估后自动优化模型和特征工程"
+        help="评估后自动优化"
+    ),
+    auto_replace: bool = typer.Option(
+        False, "--auto-replace", "-r",
+        help="自动执行模型更换（需要与--auto-optimize一起使用）"
+    ),
+    config_dir: str = typer.Option(
+        "config", "--config-dir", "-c",
+        help="配置文件目录"
     ),
     log_level: str = typer.Option(
         "INFO", "--log-level", "-l",
         help="日志级别 (DEBUG, INFO, WARNING, ERROR)"
     )
 ):
-    """评估已有模型"""
-    # 如果是直接调用命令而不是子命令，则执行评估
-    if ctx.invoked_subcommand is None:
-        # 配置日志
-        log_level_map = {
-            "DEBUG": logging.DEBUG,
-            "INFO": logging.INFO,
-            "WARNING": logging.WARNING,
-            "ERROR": logging.ERROR
-        }
-        actual_log_level = log_level_map.get(log_level.upper(), logging.INFO)
-        setup_logging(log_level=actual_log_level)
+    """评估模型性能"""
+    # 配置日志
+    from src.utils.logger import setup_logging
+    log_level_mapping = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40
+    }
+    setup_logging(log_level=log_level_mapping.get(log_level.upper(), 20))
+    
+    # 加载配置
+    try:
+        config = ConfigManager(config_dir=config_dir)
+    except Exception as e:
+        print_error(f"加载配置失败: {str(e)}")
+        raise typer.Exit(code=1)
+    
+    # 初始化组件
+    from src.models.model_factory import ModelFactory
+    model_factory = ModelFactory()
+    data_processor = DataProcessor()
+    trainer = ModelTrainer(
+        model_factory=model_factory,
+        config=config
+    )
+    
+    # 加载模型
+    try:
+        if model_path:
+            # 从路径中提取模型类型
+            model_filename = os.path.basename(model_path)
+            if "xgboost" in model_filename:
+                model_type_for_loading = "xgboost"
+            elif "random_forest" in model_filename:
+                model_type_for_loading = "random_forest"
+            elif "lstm" in model_filename:
+                model_type_for_loading = "lstm"
+            elif "mlp" in model_filename:
+                model_type_for_loading = "mlp"
+            else:
+                model_type_for_loading = model_type  # 使用命令行指定的类型
+                
+            model = trainer.model_factory.load_model(model_type_for_loading, model_path)
+        else:
+            # 尝试加载最新模型
+            model = trainer.model_factory.load_latest_model(model_type)
+            
+        print_info(f"已加载模型: {type(model).__name__}")
+    except Exception as e:
+        print_error(f"加载模型失败: {str(e)}")
+        raise typer.Exit(code=1)
+    
+    # 加载测试数据
+    try:
+        if test_data:
+            test_df = pd.read_csv(test_data)
+        else:
+            # 使用默认测试数据
+            data_storage = DataStorage(config=config)
+            test_df = data_storage.load_test_data()
         
-        # 加载配置
-        try:
-            config = ConfigManager(config_dir=config_dir)
-        except Exception as e:
-            print_error(f"加载配置失败: {str(e)}")
+        if test_df is None or len(test_df) == 0:
+            print_error("未找到测试数据")
             raise typer.Exit(code=1)
         
-        # 初始化组件
-        model_factory = ModelFactory()
-        data_processor = DataProcessor()
-        trainer = ModelTrainer(
-            model_factory=model_factory,
-            config=config
+        # 分离特征和标签
+        if 'label' in test_df.columns:
+            X_test = test_df.drop('label', axis=1)
+            y_test = test_df['label']
+        else:
+            X_test = test_df
+            y_test = None
+        
+        # 对测试数据进行预处理（不重新拟合）
+        X_test = data_processor.preprocess_features(X_test, fit=False)
+        print_info(f"已加载测试数据，样本数: {len(X_test)}")
+        
+        # 转换为numpy数组以供后续使用
+        if hasattr(X_test, 'values'):
+            X_test_array = X_test.values
+        else:
+            X_test_array = np.array(X_test)
+            
+        if y_test is not None and hasattr(y_test, 'values'):
+            y_test_array = y_test.values
+        else:
+            y_test_array = np.array(y_test) if y_test is not None else np.array([])
+        
+        # 确保y_test_array是numpy数组类型
+        if not isinstance(y_test_array, np.ndarray):
+            y_test_array = np.array(y_test_array)
+            
+        # 确保X_test_array是numpy数组类型
+        if not isinstance(X_test_array, np.ndarray):
+            X_test_array = np.array(X_test_array)
+        
+    except Exception as e:
+        print_error(f"加载测试数据失败: {str(e)}")
+        raise typer.Exit(code=1)
+    
+    # 执行评估
+    try:
+        # 确保y_test_array始终有定义
+        if 'y_test_array' not in locals():
+            y_test_array = np.array([])
+            
+        metrics, report_path = trainer.evaluate_model(
+            model=model,
+            model_type=model_type,
+            X_test=X_test_array,
+            y_test=y_test_array,
+            output_path=output
         )
         
-        # 加载模型
-        try:
-            if model_path:
-                model = model_factory.load_model(model_type, model_path)
+        print_success("模型评估完成!")
+        print_info("评估指标:")
+        for metric, value in metrics.items():
+            if isinstance(value, (int, float)):
+                print(f"  {metric}: {value:.4f}")
             else:
-                model = model_factory.load_latest_model(model_type)
-                model_path = model_factory.get_latest_model_path(model_type)
-            print_info(f"已加载模型: {model_path}")
-        except Exception as e:
-            print_error(f"加载模型失败: {str(e)}")
-            raise typer.Exit(code=1)
+                print(f"  {metric}: {value}")
+        print_info(f"评估报告已保存至: {report_path}")
         
-        # 加载测试数据
-        try:
-            if test_data:
-                X_test, y_test = data_processor.load_processed_data(test_data)
-            else:
-                test_dir = config.get("data.test_dir", "data/test")
-                X_test, y_test = None, None
-                if os.path.exists(test_dir):
-                    try:
-                        X_test, y_test = data_processor.load_processed_data(test_dir)
-                    except Exception as e:
-                        print_warning(f"加载测试数据失败: {e}")
-                
-                # 如果没有测试数据或加载失败，使用训练数据的一部分
-                if X_test is None or len(X_test) == 0:
-                    print_warning(f"测试数据目录 {test_dir} 不存在或为空，使用训练数据的一部分作为测试集")
-                    train_dir = config.get("data.processed_dir", "data/processed")
-                    X, y = data_processor.load_processed_data(train_dir)
-                    _, X_test, _, y_test = data_processor.split_train_test(X, y, test_size=0.2)
-            
-            if X_test is None or len(X_test) == 0:
-                print_error("没有可用的测试数据")
-                raise typer.Exit(code=1)
-                
-            # 对测试数据进行预处理
-            print_info(f"原始测试数据形状: {X_test.shape}")
-            # 先清理数据
-            X_test_cleaned = data_processor.clean_data(X_test)
-            print_info(f"清理后的测试数据形状: {X_test_cleaned.shape}")
-            
-            # 获取模型兼容的特征集
-            model_compatible_features, _ = data_processor.get_model_compatible_features()
-            available_features = [f for f in model_compatible_features if f in X_test_cleaned.columns]
-            
-            if len(available_features) != len(model_compatible_features):
-                print_warning(f"特征不完整，期望: {model_compatible_features}, 可用: {available_features}")
-            
-            # 只保留模型兼容的特征
-            X_test_filtered = X_test_cleaned[available_features]
-            X_test = data_processor.preprocess_features(X_test_filtered, fit=True)
-            print_info(f"预处理后的测试数据形状: {X_test.shape}")
-            
-            # 检查特征数量是否匹配
-            if hasattr(model, 'model') and hasattr(model.model, 'n_features_in_'):
-                expected_features_count = model.model.n_features_in_
-                actual_features_count = X_test.shape[1] if hasattr(X_test, 'shape') else len(X_test)
-                if actual_features_count != expected_features_count:
-                    print_warning(f"特征数量不匹配，模型期望: {expected_features_count}, 实际: {actual_features_count}")
-                    # 尝试调整特征数量
-                    if actual_features_count > expected_features_count:
-                        print_info(f"截取前{expected_features_count}个特征")
-                        if hasattr(X_test, 'iloc'):
-                            X_test = X_test.iloc[:, :expected_features_count]
-                        else:
-                            X_test = X_test[:, :expected_features_count]
-                    else:
-                        print_error(f"特征数量不足，无法进行评估")
-                        raise typer.Exit(code=1)
-            
-            print_info(f"已加载测试数据，样本数: {len(X_test)}")
-        except Exception as e:
-            print_error(f"加载测试数据失败: {str(e)}")
-            raise typer.Exit(code=1)
-
-        # 执行评估
-        try:
-            metrics, report_path = trainer.evaluate_model(
+        # 如果启用了自动优化
+        if auto_optimize:
+            print_info("开始自动优化...")
+            _perform_auto_optimization(
                 model=model,
                 model_type=model_type,
-                X_test=X_test,
-                y_test=y_test,
-                output_path=output
+                metrics=metrics,
+                config=config,
+                model_factory=model_factory,
+                auto_replace=auto_replace,
+                X_test=X_test_array,
+                y_test=y_test_array
             )
-            
-            print_success("模型评估完成!")
-            print_info("评估指标:")
-            for metric, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    print(f"  {metric}: {value:.4f}")
-                else:
-                    print(f"  {metric}: {value}")
-            print_info(f"评估报告已保存至: {report_path}")
-            
-            # 如果启用了自动优化
-            if auto_optimize:
-                print_info("开始自动优化...")
-                _perform_auto_optimization(
-                    model=model,
-                    model_type=model_type,
-                    metrics=metrics,
-                    config=config,
-                    model_factory=model_factory
-                )
-            
-        except Exception as e:
-            print_error(f"评估失败: {str(e)}")
-            raise typer.Exit(code=1)
+        
+    except Exception as e:
+        print_error(f"评估失败: {str(e)}")
+        raise typer.Exit(code=1)
 
 @train_app.command(name="optimize", help="基于评估结果优化模型和特征工程")
 def optimize_model(
@@ -552,7 +561,13 @@ def optimize_model(
 ):
     """基于评估结果优化模型和特征工程"""
     # 配置日志
-    setup_logging(log_level=log_level)
+    log_level_mapping = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40
+    }
+    setup_logging(log_level=log_level_mapping.get(log_level.upper(), 20))
     
     # 加载配置
     try:
@@ -603,7 +618,8 @@ def optimize_model(
             model_type=model_type,
             evaluation_metrics=metrics,
             protocol=None,  # 添加缺失的protocol参数
-            feature_importance=feature_importance
+            feature_importance=feature_importance,
+            model_factory=model_factory
         )
         
         # 输出优化结果
@@ -615,11 +631,13 @@ def optimize_model(
         print_error(f"优化过程中发生错误: {str(e)}")
         raise typer.Exit(code=1)
 
-def _perform_auto_optimization(model, model_type, metrics, config, model_factory):
+def _perform_auto_optimization(model, model_type, metrics, config, model_factory, auto_replace=False, X_test=None, y_test=None):
     """执行自动优化的辅助函数"""
     try:
+        from src.training.feedback_optimizer import FeedbackOptimizer
+        from src.training.model_trainer import ModelTrainer
         optimizer = FeedbackOptimizer(config=config)
-        
+        optimizer.model_trainer = ModelTrainer(model_factory=model_factory, config=config)
         
         # 获取特征重要性
         feature_importance = None
@@ -642,6 +660,23 @@ def _perform_auto_optimization(model, model_type, metrics, config, model_factory
             print_info("自动优化建议:")
             for i, recommendation in enumerate(optimization_result["recommendations"], 1):
                 print(f"  {i}. {recommendation}")
+        
+        # 如果启用了自动更换模型
+        if auto_replace and X_test is not None and y_test is not None and len(y_test) > 0:
+            print_info("开始自动执行模型更换...")
+            execution_result = optimizer.auto_execute_recommendations(
+                recommendations=optimization_result,
+                X=X_test,
+                y=y_test,
+                model_factory=model_factory
+            )
+            
+            if execution_result["model_changed"]:
+                print_success(f"模型已成功更换为 {execution_result['new_model'].__class__.__name__}")
+                print_info(f"新模型指标: {execution_result['metrics']}")
+                print_info(f"模型保存路径: {execution_result['model_path']}")
+            else:
+                print_info("未执行模型更换或更换失败")
         
         # 保存优化历史
         optimizer.save_optimization_history()
@@ -666,7 +701,13 @@ def train_self_driving(
 ):
     """启动自驱动自学习闭环系统"""
     # 初始化日志
-    setup_logging(log_level=log_level)
+    log_level_mapping = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40
+    }
+    setup_logging(log_level=log_level_mapping.get(log_level.upper(), 20))
     
     # 加载配置
     try:
@@ -769,7 +810,13 @@ def train_automl(
 ):
     """启动自动化机器学习训练，实现完整的训练-评估-优化-再训练闭环"""
     # 初始化日志
-    setup_logging(log_level=log_level)
+    log_level_mapping = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40
+    }
+    setup_logging(log_level=log_level_mapping.get(log_level.upper(), 20))
     
     # 加载配置
     try:

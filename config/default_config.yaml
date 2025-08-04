@@ -113,6 +113,9 @@ training:
     # 启用模型优化
     enable_model_optimization: true
     
+    # F1分数阈值（低于此值需要更换模型）
+    f1_threshold_for_model_change: 0.3
+    
     # 性能阈值（低于此值需要优化）
     performance_threshold: 0.7
     

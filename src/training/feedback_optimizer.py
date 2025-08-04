@@ -10,6 +10,7 @@ from src.features.stat_extractor import StatFeatureExtractor
 from src.features.temporal_extractor import TemporalFeatureExtractor
 from .model_trainer import ModelTrainer
 from .incremental_trainer import IncrementalTrainer
+from src.models.model_factory import ModelFactory
 
 class FeedbackOptimizer:
     """基于反馈进行模型优化的组件"""
@@ -36,8 +37,8 @@ class FeedbackOptimizer:
         self.temporal_extractor = TemporalFeatureExtractor()
         
         # 训练器
-        self.model_trainer = ModelTrainer(None, self.config)  # model_factory将在使用时传入
-        self.incremental_trainer = IncrementalTrainer(None, self.config)  # model_factory将在使用时传入
+        self.model_trainer: Optional[ModelTrainer] = None
+        self.incremental_trainer: Optional[IncrementalTrainer] = None
         
         # 优化历史记录
         self.optimization_history: List[Dict] = []
@@ -90,6 +91,7 @@ class FeedbackOptimizer:
         self.logger.info(f"当前模型性能 - F1: {f1_score:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
         
         # 如果F1分数较低，考虑更换模型类型
+        model_change_suggested = False
         if f1_score < self.optimization_config["f1_threshold_for_model_change"]:
             # 为协议选择更好的模型类型
             if protocol is not None and model_factory is not None:
@@ -99,6 +101,7 @@ class FeedbackOptimizer:
                 if better_model and better_model != model_type:
                     changes["model_type"] = better_model
                     reasoning.append(f"F1分数({f1_score:.4f})低于阈值({self.optimization_config['f1_threshold_for_model_change']})，建议更换为{better_model}模型")
+                    model_change_suggested = True
         
         # 2. 分析精确率和召回率平衡
         if abs(precision - recall) > 0.1:  # 如果差异较大
@@ -163,8 +166,8 @@ class FeedbackOptimizer:
                 changes["threshold"] = new_threshold
                 reasoning.append(f"提高分类阈值以提高精确率: {current_threshold} -> {new_threshold}")
         
-        # 6. 根据F1分数考虑使用集成模型
-        if f1_score < 0.4 and model_type in ["xgboost", "random_forest", "mlp", "lstm"]:
+        # 6. 根据F1分数考虑使用集成模型（仅在未建议其他模型更换时）
+        if f1_score < 0.4 and model_type in ["xgboost", "random_forest", "mlp", "lstm"] and not model_change_suggested:
             changes["model_type"] = "ensemble"
             reasoning.append(f"F1分数({f1_score:.4f})较低，建议使用集成模型提高性能")
         
@@ -366,6 +369,164 @@ class FeedbackOptimizer:
         # 例如启用/禁用某些特征，调整特征计算参数等
         pass
     
+    def execute_model_change(
+        self,
+        old_model_type: str,
+        new_model_type: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        protocol_labels: Optional[List[int]] = None,
+        model_factory: Optional[ModelFactory] = None
+    ) -> Tuple[Any, Dict[str, float], str]:
+        """
+        执行模型更换
+        
+        Args:
+            old_model_type: 旧模型类型
+            new_model_type: 新模型类型
+            X: 训练数据特征
+            y: 训练数据标签
+            protocol_labels: 协议标签
+            model_factory: 模型工厂
+            
+        Returns:
+            Tuple[新模型, 训练指标, 模型保存路径]
+        """
+        self.logger.info(f"开始执行模型更换: {old_model_type} -> {new_model_type}")
+        
+        try:
+            # 确保训练器已初始化
+            if not self.model_trainer:
+                if not model_factory:
+                    raise ValueError("model_factory 不能为空")
+                self.model_trainer = ModelTrainer(model_factory=model_factory, config=self.config)
+            
+            # 特殊处理：如果目标模型是LSTM，需要将数据转换为时序格式
+            if new_model_type == "lstm" and len(X.shape) == 2:
+                self.logger.info("检测到目标模型为LSTM，正在转换数据格式...")
+                # 获取序列长度配置，默认为30
+                sequence_length = self.config.get("lstm.sequence_length", 30)
+                
+                # 将2D数据转换为3D时序数据
+                n_samples, n_features = X.shape
+                
+                # 如果样本数不足以形成一个序列，则不适合使用LSTM
+                if n_samples < sequence_length:
+                    self.logger.warning(f"样本数({n_samples})小于序列长度({sequence_length})，不适合使用LSTM模型")
+                    # 在这种情况下，建议使用其他模型类型
+                    self.logger.info("改用ensemble模型进行训练")
+                    new_model_type = "ensemble"
+                else:
+                    # 创建时序数据
+                    n_sequences = n_samples - sequence_length + 1
+                    X_reshaped = np.zeros((n_sequences, sequence_length, n_features))
+                    
+                    for i in range(n_sequences):
+                        X_reshaped[i] = X[i:i+sequence_length]
+                    
+                    # 对应的标签也需要调整
+                    y_reshaped = y[sequence_length-1:]
+                    
+                    # 如果有协议标签，也需要调整
+                    if protocol_labels is not None and len(protocol_labels) == n_samples:
+                        protocol_labels = protocol_labels[sequence_length-1:]
+                    
+                    # 更新X和y
+                    X, y = X_reshaped, y_reshaped
+                    self.logger.info(f"数据已转换为LSTM格式: {X.shape}")
+            
+            # 训练新模型
+            new_model, metrics, model_path = self.model_trainer.train_new_model(
+                model_type=new_model_type,
+                X=X,
+                y=y,
+                protocol_labels=protocol_labels
+            )
+            
+            self.logger.info(f"新模型训练完成，F1分数: {metrics.get('f1', 0):.4f}")
+            
+            # 保存优化记录
+            self.optimization_history.append({
+                "timestamp": time.time(),
+                "type": "model_change",
+                "old_model_type": old_model_type,
+                "new_model_type": new_model_type,
+                "metrics": metrics,
+                "model_path": model_path
+            })
+            
+            return new_model, metrics, model_path
+            
+        except Exception as e:
+            self.logger.error(f"模型更换执行失败: {str(e)}", exc_info=True)
+            raise
+
+    def auto_execute_recommendations(
+        self,
+        recommendations: Dict[str, Any],
+        X: np.ndarray,
+        y: np.ndarray,
+        protocol_labels: Optional[List[int]] = None,
+        model_factory: Optional[ModelFactory] = None
+    ) -> Dict[str, Any]:
+        """
+        自动执行优化建议
+        
+        Args:
+            recommendations: 优化建议
+            X: 训练数据特征
+            y: 训练数据标签
+            protocol_labels: 协议标签
+            model_factory: 模型工厂
+            
+        Returns:
+            执行结果字典
+        """
+        self.logger.info("开始自动执行优化建议")
+        result = {
+            "model_changed": False,
+            "new_model": None,
+            "metrics": {},
+            "model_path": "",
+            "changes": []
+        }
+        
+        try:
+            changes = recommendations.get("changes", {})
+            model_type = recommendations.get("model_type", "")
+            
+            # 检查是否需要更换模型
+            if "model_type" in changes and model_factory:
+                new_model_type = changes["model_type"]
+                if new_model_type != model_type:
+                    self.logger.info(f"检测到模型更换建议: {model_type} -> {new_model_type}")
+                    
+                    # 执行模型更换
+                    new_model, metrics, model_path = self.execute_model_change(
+                        old_model_type=model_type,
+                        new_model_type=new_model_type,
+                        X=X,
+                        y=y,
+                        protocol_labels=protocol_labels,
+                        model_factory=model_factory
+                    )
+                    
+                    result.update({
+                        "model_changed": True,
+                        "new_model": new_model,
+                        "metrics": metrics,
+                        "model_path": model_path,
+                        "changes": [f"模型已从 {model_type} 更换为 {new_model_type}"]
+                    })
+                    
+                    self.logger.info(f"模型更换执行完成: {model_type} -> {new_model_type}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"自动执行优化建议失败: {str(e)}", exc_info=True)
+            return result
+
     def save_optimization_history(self, filepath: Optional[str] = None):
         """保存优化历史记录"""
         if filepath is None:

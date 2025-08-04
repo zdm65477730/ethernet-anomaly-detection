@@ -32,11 +32,14 @@ class ConfigManager:
         self.main_config_path = os.path.join(self.config_dir, "config.yaml")
         self.model_config_path = os.path.join(self.config_dir, "model_config.yaml")
         self.detection_rules_path = os.path.join(self.config_dir, "detection_rules.yaml")
+        self.self_driving_config_path = os.path.join(self.config_dir, "self_driving_config.yaml")
+        self.default_config_path = os.path.join(self.config_dir, "default_config.yaml")
         
         # 配置数据
         self._config: Dict[str, Any] = {}
         self._model_config: Dict[str, Any] = {}
         self._detection_rules: Dict[str, Any] = {}
+        self._self_driving_config: Dict[str, Any] = {}
         
         # 加载配置
         self.load()
@@ -48,7 +51,7 @@ class ConfigManager:
             self.logger.warning(f"配置目录 {self.config_dir} 不存在，将使用默认配置")
             self._init_default_configs()
             return
-        
+            
         # 加载主配置
         try:
             if os.path.exists(self.main_config_path):
@@ -87,6 +90,23 @@ class ConfigManager:
         except Exception as e:
             self.logger.error(f"加载检测规则失败: {str(e)}，使用默认配置")
             self._init_default_detection_rules()
+            
+        # 加载自驱动学习配置
+        try:
+            if os.path.exists(self.self_driving_config_path):
+                with open(self.self_driving_config_path, "r") as f:
+                    self._self_driving_config = yaml.safe_load(f) or {}
+                self.logger.info(f"已加载自驱动学习配置: {self.self_driving_config_path}")
+                
+                # 将自驱动学习配置合并到主配置中
+                if "training" in self._self_driving_config:
+                    if "training" not in self._config:
+                        self._config["training"] = {}
+                    self._config["training"]["self_driving"] = self._self_driving_config["training"]["self_driving"]
+            else:
+                self.logger.info(f"自驱动学习配置文件 {self.self_driving_config_path} 不存在")
+        except Exception as e:
+            self.logger.error(f"加载自驱动学习配置失败: {str(e)}")
     
     def _init_default_main_config(self) -> None:
         """初始化默认主配置"""
@@ -201,6 +221,32 @@ class ConfigManager:
         self._init_default_main_config()
         self._init_default_model_config()
         self._init_default_detection_rules()
+        
+        # 如果默认配置文件存在，则加载它来覆盖默认配置
+        if os.path.exists(self.default_config_path):
+            try:
+                with open(self.default_config_path, "r") as f:
+                    default_config = yaml.safe_load(f) or {}
+                
+                # 合并默认配置
+                self._merge_configs(self._config, default_config)
+                self.logger.info(f"已加载默认配置文件: {self.default_config_path}")
+            except Exception as e:
+                self.logger.error(f"加载默认配置文件失败: {str(e)}")
+    
+    def _merge_configs(self, base_config: Dict[str, Any], override_config: Dict[str, Any]) -> None:
+        """
+        递归合并配置字典
+        
+        Args:
+            base_config: 基础配置
+            override_config: 覆盖配置
+        """
+        for key, value in override_config.items():
+            if key in base_config and isinstance(base_config[key], dict) and isinstance(value, dict):
+                self._merge_configs(base_config[key], value)
+            else:
+                base_config[key] = value
     
     def save(self) -> None:
         """保存所有配置文件"""
@@ -330,6 +376,15 @@ class ConfigManager:
     def get_detection_rules(self) -> Dict[str, Any]:
         """获取所有检测规则"""
         return self._detection_rules.copy()
+    
+    def get_self_driving_config(self) -> Dict[str, Any]:
+        """
+        获取自驱动学习配置
+        
+        Returns:
+            自驱动学习配置字典
+        """
+        return self._self_driving_config.get("training", {}).get("self_driving", {})
     
     def __str__(self) -> str:
         """返回配置的字符串表示"""

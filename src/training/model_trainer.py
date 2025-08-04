@@ -41,8 +41,8 @@ class ModelTrainer:
         X: Union[pd.DataFrame, np.ndarray],
         y: Union[pd.Series, np.ndarray],
         protocol_labels: Optional[List[int]] = None,
-        test_size: float = None,
-        cv_folds: int = None,
+        test_size: Optional[float] = None,
+        cv_folds: Optional[int] = None,
         train_params: Optional[Dict] = None,
         output_dir: Optional[str] = None
     ) -> Tuple[BaseModel, Dict[str, float], str]:
@@ -89,13 +89,17 @@ class ModelTrainer:
         if isinstance(y, pd.Series):
             y_np = y.values
         else:
-            y_np = y
+            y_np = np.array(y)
             
         # 确保X是numpy数组
         if isinstance(X_processed, pd.DataFrame):
             X_np = X_processed.values
         else:
-            X_np = X_processed
+            X_np = np.array(X_processed)
+            
+        # 确保协议标签是列表或数组
+        if protocol_labels is not None:
+            protocol_labels = list(protocol_labels)
         
         # 分割训练集和测试集
         X_train, X_test, y_train, y_test = train_test_split(
@@ -107,7 +111,7 @@ class ModelTrainer:
         
         self.logger.info(
             f"数据分割完成 - 训练集: {len(X_train)} 样本, "
-            f"测试集: {len(X_test)} 样本, 异常比例: {np.mean(y_np):.2%}"
+            f"测试集: {len(X_test)} 样本, 异常比例: {np.mean(np.array(y_np)):.2%}"
         )
         
         # 执行交叉验证
@@ -127,7 +131,7 @@ class ModelTrainer:
         
         # 评估最终模型
         test_protocol_labels = None
-        if protocol_labels is not None:
+        if protocol_labels is not None and len(protocol_labels) == len(y_np):
             # 分割协议标签以匹配测试集
             _, _, _, test_protocol_labels = train_test_split(
                 np.arange(len(protocol_labels)), protocol_labels,
@@ -135,6 +139,8 @@ class ModelTrainer:
                 random_state=self.default_train_params["random_state"],
                 stratify=y_np
             )
+        elif protocol_labels is not None and len(protocol_labels) != len(y_np):
+            self.logger.warning(f"协议标签数量({len(protocol_labels)})与标签数量({len(y_np)})不一致，跳过协议标签分割")
         
         test_metrics = self.evaluator.evaluate_model(
             model=model,

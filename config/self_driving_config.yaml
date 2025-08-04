@@ -1,0 +1,61 @@
+# 自驱动学习配置文件
+
+training:
+  # 持续训练配置（也适用于自驱动学习）
+  continuous:
+    # 检查新数据的时间间隔（秒）
+    check_interval: 30
+    
+    # 触发训练的最小新样本数
+    min_samples: 1000
+    
+    # 使用的最大历史数据天数
+    max_history_days: 30
+    
+    # 全量重训间隔（秒）
+    retrain_full_interval: 604800  # 7天
+    
+    # 协议特定模型映射
+    protocol_model_map:
+      6: "lstm"      # TCP使用LSTM
+      17: "xgboost"  # UDP使用XGBoost
+      1: "mlp"       # ICMP使用MLP
+    
+    # 启用自动优化
+    enable_auto_optimization: true
+
+  # 自驱动学习配置
+  self_driving:
+    # 数据检查间隔（秒）
+    data_check_interval: 30
+    
+    # 触发学习的最小新样本数
+    min_new_samples: 1000
+    
+    # 使用的最大历史数据天数
+    max_history_days: 30
+    
+    # 评估阈值（低于此值将触发再训练）
+    evaluation_threshold: 0.75
+    
+    # 再训练间隔（秒）
+    retrain_interval: 60
+    
+    # 数据源（可选：file, generated, capture）
+    data_sources: 
+      - "file"
+      - "generated"
+    
+    # 网络捕获相关配置
+    capture:
+      # 捕获接口
+      interface: "eth0"
+      
+      # 捕获时长（秒）
+      duration: 60
+      
+      # BPF过滤规则（空表示捕获所有流量）
+      filter: ""
+      
+      # 捕获数据存储目录
+      capture_dir: "data/capture"

@@ -101,8 +101,7 @@ class ModelFactory(BaseComponent):
             
         model_class = self.MODEL_CLASSES[model_type]
         # 确保传递model_type参数
-        kwargs["model_type"] = model_type
-        return model_class(**kwargs)
+        return model_class(model_type=model_type, **kwargs)
     
     def save_model(self, model: BaseModel, model_path: str) -> bool:
         """

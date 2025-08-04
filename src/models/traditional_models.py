@@ -13,6 +13,9 @@ from .base_model import BaseModel
 class XGBoostModel(BaseModel):
     """XGBoost模型（适合统计特征与结构化数据）"""
     def __init__(self,** kwargs):
+        # 从kwargs中提取model_type，如果不存在则默认为"xgboost"
+        model_type = kwargs.pop("model_type", "xgboost")
+        
         default_params = {
             "n_estimators": 100,
             "max_depth": 5,
@@ -27,7 +30,7 @@ class XGBoostModel(BaseModel):
         xgb_params.pop("model_type", None)
         xgb_params.pop("use_label_encoder", None)
         
-        super().__init__(**params)
+        super().__init__(model_type=model_type, **params)
         self.model = XGBClassifier(**xgb_params)
 
     def fit(
@@ -98,6 +101,9 @@ class XGBoostModel(BaseModel):
 class RandomForestModel(BaseModel):
     """随机森林模型（适合高维特征与非线性关系）"""
     def __init__(self, **kwargs):
+        # 从kwargs中提取model_type，如果不存在则默认为"random_forest"
+        model_type = kwargs.pop("model_type", "random_forest")
+        
         default_params = {
             "n_estimators": 100,
             "max_depth": 8,
@@ -106,7 +112,7 @@ class RandomForestModel(BaseModel):
         }
         # 合并默认参数与用户参数
         params = {**default_params, **kwargs}
-        super().__init__(**params)
+        super().__init__(model_type=model_type, **params)
         self.model = RandomForestClassifier(**params)
 
     def fit(

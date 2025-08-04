@@ -13,6 +13,9 @@ class EnsembleModel(BaseModel):
     """集成模型，结合多种模型的优势"""
     
     def __init__(self, **kwargs):
+        # 从kwargs中提取model_type，如果不存在则默认为"ensemble"
+        model_type = kwargs.pop("model_type", "ensemble")
+        
         default_params = {
             "models": ["xgboost", "random_forest", "mlp"],  # 集成的模型类型
             "weights": None,  # 模型权重，默认为等权重
@@ -20,7 +23,7 @@ class EnsembleModel(BaseModel):
             "threshold": 0.5   # 分类阈值
         }
         params = {**default_params, **kwargs}
-        super().__init__(model_type="ensemble", **params)
+        super().__init__(model_type=model_type, **params)
         self.models = []  # 存储训练好的模型
         self.model_weights = None  # 模型权重
         self.logger = get_logger("model.ensemble")
@@ -32,6 +35,11 @@ class EnsembleModel(BaseModel):
             self.model_weights = [1.0/n_models] * n_models
         else:
             self.model_weights = self.params["weights"]
+        
+        # 确保model_weights不为None
+        if self.model_weights is None:
+            n_models = len(self.params["models"])
+            self.model_weights = [1.0/n_models] * n_models
 
     def fit(
         self,
@@ -50,11 +58,11 @@ class EnsembleModel(BaseModel):
             
             # 根据模型类型创建并训练子模型
             if model_type == "xgboost":
-                model = XGBoostModel()
+                model = XGBoostModel(model_type="xgboost")
             elif model_type == "random_forest":
-                model = RandomForestModel()
+                model = RandomForestModel(model_type="random_forest")
             elif model_type == "mlp":
-                model = MLPModel()
+                model = MLPModel(model_type="mlp")
             else:
                 raise ValueError(f"不支持的模型类型: {model_type}")
             
@@ -152,7 +160,12 @@ class EnsembleModel(BaseModel):
         # 保存子模型
         sub_models = []
         for i, model in enumerate(self.models):
-            sub_model_path = f"{file_path}_submodel_{i}"
+            # 根据子模型类型使用正确的文件扩展名
+            if model.model_type in ["mlp", "lstm"]:
+                sub_model_path = f"{file_path}_submodel_{i}.keras"
+            else:
+                sub_model_path = f"{file_path}_submodel_{i}.pkl"
+                
             model.save(sub_model_path)
             sub_models.append({
                 "type": model.model_type,
@@ -180,7 +193,7 @@ class EnsembleModel(BaseModel):
             metadata = pickle.load(f)
         
         # 创建模型实例
-        model = cls(**metadata["params"])
+        model = cls(model_type=metadata.get("model_type", "ensemble"), **metadata["params"])
         model.is_trained = metadata["is_trained"]
         model.feature_names = metadata["feature_names"]
         model.train_timestamp = metadata["train_timestamp"]

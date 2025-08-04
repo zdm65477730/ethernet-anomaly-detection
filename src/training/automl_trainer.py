@@ -480,7 +480,8 @@ class AutoMLTrainer:
                 evaluation_metrics=metrics,
                 protocol=protocol,
                 feature_importance=feature_importance,
-                model_factory=self.model_factory
+                model_factory=self.model_factory,
+                request_model_change=True  # 请求模型更换建议
             )
             
             # 记录优化建议
@@ -489,6 +490,28 @@ class AutoMLTrainer:
                     f"{model_type} 模型优化建议: "
                     f"{'; '.join(optimization_result['recommendations'])}"
                 )
+                
+            # 处理模型更换建议
+            if optimization_result.get("model_change_suggestion"):
+                suggested_model = optimization_result["model_change_suggestion"]
+                if suggested_model != model_type:
+                    self.logger.info(
+                        f"优化器建议更换模型类型: {model_type} -> {suggested_model}"
+                    )
+                    model_type = suggested_model
+                    # 可选：立即加载新模型类型的最佳模型
+                    try:
+                        model = self.model_factory.load_best_model_for_protocol(
+                            model_type=suggested_model,
+                            protocol=protocol
+                        )
+                        self.logger.info(
+                            f"已加载 {suggested_model} 模型用于后续训练"
+                        )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"无法加载建议的模型类型 {suggested_model}: {str(e)}，将继续使用当前模型"
+                        )
             
             # 保存优化历史
             self.feedback_optimizer.save_optimization_history()

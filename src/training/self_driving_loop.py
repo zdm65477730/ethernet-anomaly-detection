@@ -52,14 +52,17 @@ class SelfDrivingLoop:
             model_selector=self.model_selector
         )
         
+        # 获取自驱动学习配置
+        self_driving_config = self.config.get_self_driving_config()
+        
         # 配置参数
         self.loop_config = {
-            "data_check_interval": self.config.get("training.self_driving.data_check_interval", 3600),  # 1小时
-            "min_new_samples": self.config.get("training.self_driving.min_new_samples", 1000),
-            "max_history_days": self.config.get("training.self_driving.max_history_days", 30),
-            "evaluation_threshold": self.config.get("training.self_driving.evaluation_threshold", 0.75),
-            "retrain_interval": self.config.get("training.self_driving.retrain_interval", 86400 * 3),  # 3天
-            "data_sources": self.config.get("training.self_driving.data_sources", ["file", "generated"])
+            "data_check_interval": self_driving_config.get("data_check_interval", 3600),  # 1小时
+            "min_new_samples": self_driving_config.get("min_new_samples", 1000),
+            "max_history_days": self_driving_config.get("max_history_days", 30),
+            "evaluation_threshold": self_driving_config.get("evaluation_threshold", 0.75),
+            "retrain_interval": self_driving_config.get("retrain_interval", 86400 * 3),  # 3天
+            "data_sources": self_driving_config.get("data_sources", ["file", "generated"])
         }
         
         # 状态变量
@@ -123,8 +126,15 @@ class SelfDrivingLoop:
             # 4. 模型评估
             evaluation_result = self._evaluate_model(model, X, y, feature_names)
             
-            # 5. 反馈优化
-            optimization_result = self._optimize_based_on_feedback(model, model_type, evaluation_result, protocol_labels)
+            # 5. 反馈优化（传递训练数据用于可能的模型更换）
+            optimization_result = self._optimize_based_on_feedback(
+                model=model, 
+                model_type=model_type, 
+                evaluation_result=evaluation_result, 
+                protocol_labels=protocol_labels, 
+                X=X, 
+                y=y
+            )
             
             # 6. 决策是否需要再训练
             if self._should_retrain(evaluation_result):
@@ -616,7 +626,15 @@ class SelfDrivingLoop:
             self.logger.warning(f"阈值优化失败: {str(e)}，使用默认阈值0.5")
             return 0.5
 
-    def _optimize_based_on_feedback(self, model, model_type: str, evaluation_result: Dict[str, Any], protocol_labels: Optional[List[int]]) -> Dict[str, Any]:
+    def _optimize_based_on_feedback(
+        self, 
+        model, 
+        model_type: str, 
+        evaluation_result: Dict[str, Any], 
+        protocol_labels: Optional[List[int]], 
+        X: np.ndarray, 
+        y: np.ndarray
+    ) -> Dict[str, Any]:
         """基于反馈进行优化"""
         self.logger.info("开始基于反馈进行优化")
         
@@ -637,6 +655,19 @@ class SelfDrivingLoop:
                 feature_importance=feature_importance,
                 model_factory=self.model_factory
             )
+            
+            # 自动执行优化建议（包括模型更换）
+            execution_result = self.feedback_optimizer.auto_execute_recommendations(
+                recommendations=optimization_result,
+                X=X,
+                y=y,
+                protocol_labels=protocol_labels,
+                model_factory=self.model_factory
+            )
+            
+            if execution_result["model_changed"]:
+                self.logger.info(f"自动模型更换完成: {model_type} -> {execution_result['new_model'].__class__.__name__}")
+                self.logger.info(f"新模型F1分数: {execution_result['metrics'].get('f1', 0):.4f}")
             
             # 保存优化历史
             self.feedback_optimizer.save_optimization_history()

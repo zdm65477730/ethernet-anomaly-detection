@@ -288,6 +288,9 @@ class LSTMModel(BaseModel):
 class MLPModel(BaseModel):
     """多层感知器（适合结构化特征，如UDP流量的统计特征）"""
     def __init__(self, **kwargs):
+        # 从kwargs中提取model_type，如果不存在则默认为"mlp"
+        model_type = kwargs.pop("model_type", "mlp")
+        
         default_params = {
             "hidden_units": [128, 64, 32],  # 隐藏层单元数
             "dropout": 0.3,
@@ -297,7 +300,7 @@ class MLPModel(BaseModel):
             "threshold": 0.5  # 可调分类阈值
         }
         params = {** default_params, **kwargs}
-        super().__init__(** params)
+        super().__init__(model_type=model_type, ** params)
         self.model = None  # 延迟构建，需知道输入特征维度
 
     def _build_model(self, n_features: int) -> tf.keras.Model:

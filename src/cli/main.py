@@ -65,6 +65,7 @@ from src.cli.commands.start import app as start_app
 from src.cli.commands.stop import app as stop_app
 from src.cli.commands.report import app as report_app
 from src.cli.commands.feedback import app as feedback_app
+from src.cli.commands.detect import app as detect_app
 from src.cli.utils import print_info, print_error
 
 # 创建Typer应用
@@ -82,6 +83,7 @@ app.add_typer(start_app, name="start", help="启动系统命令")
 app.add_typer(stop_app, name="stop", help="停止系统命令")
 app.add_typer(report_app, name="report", help="检测报告命令")
 app.add_typer(feedback_app, name="feedback", help="反馈处理命令")
+app.add_typer(detect_app, name="detect", help="离线检测命令")
 
 # 添加简单命令
 app.command(name="status")(status_command)
