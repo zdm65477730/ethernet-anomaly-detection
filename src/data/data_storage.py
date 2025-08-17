@@ -360,8 +360,13 @@ class DataStorage:
                     test_file = alt_file
                     break
             else:
-                self.logger.warning(f"未找到测试数据文件: {test_file}")
-                return pd.DataFrame()
+                # 如果test目录中没有测试数据，检查processed目录
+                processed_test_file = os.path.join(self.processed_dir, "test_data.csv")
+                if os.path.exists(processed_test_file):
+                    test_file = processed_test_file
+                else:
+                    self.logger.warning(f"未找到测试数据文件: {test_file}")
+                    return pd.DataFrame()
         
         df = self._read_data(test_file)
         self.logger.info(f"已加载测试数据，样本数: {len(df)}")
