@@ -1,13 +1,49 @@
 import time
 import numpy as np
+from typing import Dict, Any, List
 from collections import defaultdict
 from src.features.base_extractor import BaseFeatureExtractor
-from src.features.protocol_specs import (
-    get_protocol_spec,
-    is_feature_relevant
-)
-from src.utils.helpers import calculate_entropy
 from src.config.config_manager import ConfigManager
+from src.utils.logger import get_logger
+
+logger = get_logger("stat_extractor")
+
+def calculate_entropy(data: bytes) -> float:
+    """计算数据的熵值"""
+    if not data:
+        return 0.0
+    
+    # 统计每个字节的出现频率
+    byte_counts = {}
+    for byte_val in data:
+        if isinstance(byte_val, int):
+            byte_counts[byte_val] = byte_counts.get(byte_val, 0) + 1
+        else:
+            # 处理bytes对象
+            byte_counts[byte_val] = byte_counts.get(byte_val, 0) + 1
+    
+    # 计算熵值
+    entropy = 0.0
+    data_len = len(data)
+    for count in byte_counts.values():
+        probability = count / data_len
+        entropy -= probability * np.log2(probability)
+    
+    return entropy
+
+def get_protocol_spec(protocol_num: int) -> Dict[str, Any]:
+    """获取协议规范信息"""
+    protocol_specs = {
+        1: {"name": "icmp", "has_ports": False},
+        6: {"name": "tcp", "has_ports": True},
+        17: {"name": "udp", "has_ports": True}
+    }
+    return protocol_specs.get(protocol_num, {"name": f"unknown({protocol_num})", "has_ports": False})
+
+def is_feature_relevant(protocol_num: int, feature_name: str) -> bool:
+    """检查特征是否与协议相关"""
+    # 所有特征都与所有协议相关（简化处理）
+    return True
 
 class StatFeatureExtractor(BaseFeatureExtractor):
     """
@@ -24,18 +60,14 @@ class StatFeatureExtractor(BaseFeatureExtractor):
     
     def _init_config(self, config):
         """初始化配置"""
-        if config is None:
-            from src.config.config_manager import ConfigManager
-            config = ConfigManager()
-        self.config = config
+        self.config = config or ConfigManager()
         
         # 初始化特征元数据
         self._init_feature_metadata()
         
         # 从配置加载启用/禁用的特征
-        if self.config:
-            self.enabled_features = self.config.get("features.enabled_stat_features", [])
-            self.disabled_features = self.config.get("features.disabled_stat_features", [])
+        self.enabled_features = self.config.get("features.enabled_stat_features", [])
+        self.disabled_features = self.config.get("features.disabled_stat_features", [])
         
         # 如果没有显式配置，启用所有特征
         if not self.enabled_features and not self.disabled_features:

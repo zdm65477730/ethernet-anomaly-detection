@@ -7,10 +7,18 @@ from datetime import datetime, timedelta
 from src.utils.logger import get_logger
 from src.features.protocol_specs import PROTOCOL_SPECS
 
+# 添加scapy导入以生成PCAP文件
+try:
+    from scapy.all import Ether, IP, TCP, UDP, ICMP, wrpcap, Raw
+    SCAPY_AVAILABLE = True
+except ImportError:
+    SCAPY_AVAILABLE = False
+    Ether = IP = TCP = UDP = ICMP = wrpcap = Raw = None
+
 class DataGenerator:
     """生成模拟的网络流量数据，用于测试和模型训练"""
     
-    def __init__(self):
+    def __init__(self, custom_anomaly_types=None):
         self.logger = get_logger("data_generator")
         
         # 协议配置（协议号: (名称, 出现概率)）
@@ -36,6 +44,16 @@ class DataGenerator:
             "large_payload": 0.01,          # 大 payload 攻击
             "unusual_flags": 0.01           # 异常TCP标志
         }
+        
+        # 如果提供了自定义异常类型，则使用自定义的
+        if custom_anomaly_types is not None:
+            self.anomaly_types = custom_anomaly_types
+            # 确保所有概率之和为1
+            total_prob = sum(self.anomaly_types.values())
+            if abs(total_prob - 1.0) > 1e-6:
+                # 归一化概率
+                for key in self.anomaly_types:
+                    self.anomaly_types[key] /= total_prob
         
         # 初始化随机种子，保证一定的可重复性
         random.seed(42)
@@ -123,6 +141,55 @@ class DataGenerator:
             timestamps.append(adjusted_ts.timestamp())
         
         return sorted(timestamps)
+    
+    def _create_scapy_packet(self, sample):
+        """根据样本数据创建Scapy数据包"""
+        if not SCAPY_AVAILABLE:
+            return None
+            
+        # 创建以太网帧
+        ether = Ether()
+        
+        # 创建IP包
+        ip = IP(src=sample["src_ip"], dst=sample["dst_ip"])
+        
+        # 根据协议类型创建传输层包
+        payload_size = sample["packet_size"] - 40  # 减去IP和TCP头部大小
+        payload_size = max(0, payload_size)  # 确保不为负数
+        payload = "X" * payload_size  # 简单的负载数据
+        
+        if sample["protocol"] == 6:  # TCP
+            tcp = TCP(sport=sample["src_port"], dport=sample["dst_port"])
+            # 解析TCP标志
+            flags = sample.get("tcp_flags", "")
+            if "SYN" in flags:
+                tcp.flags = "S"  # SYN
+            if "ACK" in flags:
+                tcp.flags = "A"  # ACK
+            if "FIN" in flags:
+                tcp.flags = "F"  # FIN
+            if "RST" in flags:
+                tcp.flags = "R"  # RST
+            if "SYN" in flags and "ACK" in flags:
+                tcp.flags = "SA"  # SYN+ACK
+            if "FIN" in flags and "ACK" in flags:
+                tcp.flags = "FA"  # FIN+ACK
+            if "PSH" in flags and "ACK" in flags:
+                tcp.flags = "PA"  # PSH+ACK
+            packet = ether / ip / tcp / Raw(load=payload)
+        elif sample["protocol"] == 17:  # UDP
+            udp = UDP(sport=sample["src_port"], dport=sample["dst_port"])
+            packet = ether / ip / udp / Raw(load=payload)
+        elif sample["protocol"] == 1:  # ICMP
+            icmp = ICMP(type=sample["icmp_type"], code=sample["icmp_code"])
+            packet = ether / ip / icmp / Raw(load=payload)
+        else:
+            # 未知协议，创建基本的IP包
+            packet = ether / ip / Raw(load=payload)
+        
+        # 设置时间戳
+        packet.time = sample["timestamp"]
+        return packet
     
     def generate_sample(self, timestamp, anomaly_type=None):
         """生成单个流量样本"""
@@ -326,8 +393,33 @@ class DataGenerator:
         
         return pd.DataFrame(model_samples)
     
+    def _save_pcap_file(self, raw_samples, pcap_path):
+        """将原始样本保存为PCAP文件"""
+        if not SCAPY_AVAILABLE:
+            self.logger.warning("Scapy库不可用，无法生成PCAP文件")
+            return False
+            
+        try:
+            packets = []
+            for sample in raw_samples:
+                packet = self._create_scapy_packet(sample)
+                if packet:
+                    packets.append(packet)
+            
+            if packets:
+                wrpcap(pcap_path, packets)
+                self.logger.info(f"PCAP文件已保存至 {pcap_path}，数据包数: {len(packets)}")
+                return True
+            else:
+                self.logger.warning("没有生成任何数据包，PCAP文件未创建")
+                return False
+        except Exception as e:
+            self.logger.error(f"保存PCAP文件时出错: {str(e)}")
+            return False
+    
     def generate(self, num_samples=10000, output_dir="data/raw", split_train_test=True, 
-                 test_size=0.2, start_time=None, force=False, generate_model_features=True):
+                 test_size=0.2, start_time=None, force=False, generate_model_features=True,
+                 generate_pcap=False):
         """
         生成指定数量的模拟流量数据
         
@@ -339,6 +431,7 @@ class DataGenerator:
             start_time: 开始时间
             force: 如果目录已存在，是否强制覆盖
             generate_model_features: 是否生成模型兼容特征
+            generate_pcap: 是否生成PCAP文件
         """
         # 创建输出目录
         os.makedirs(output_dir, exist_ok=True)
@@ -366,9 +459,10 @@ class DataGenerator:
         
         # 显示数据分布
         self.logger.info(f"数据分布:")
-        self.logger.info(f"  正常样本: {len(raw_df[raw_df['label'] == 0])} ({len(raw_df[raw_df['label'] == 0])/len(raw_df):.2%})")
-        self.logger.info(f"  异常样本: {len(raw_df[raw_df['label'] == 1])} ({len(raw_df[raw_df['label'] == 1])/len(raw_df):.2%})")
-        self.logger.info(f"  协议分布: \n{raw_df['protocol_name'].value_counts().to_string()}")
+        self.logger.info(f"  正常样本: {self.anomaly_types.get('normal', 0)*num_samples:.0f} ({self.anomaly_types.get('normal', 0):.2%})")
+        for anomaly_type, prob in self.anomaly_types.items():
+            if anomaly_type != "normal":
+                self.logger.info(f"  {anomaly_type}: {prob*num_samples:.0f} ({prob:.2%})")
         
         # 保存原始数据
         raw_path = os.path.join(output_dir, "raw_data.csv")
@@ -383,6 +477,14 @@ class DataGenerator:
             model_path = os.path.join(output_dir, "model_features_data.csv")
             model_df.to_csv(model_path, index=False)
             self.logger.info(f"模型兼容特征数据已保存至 {model_path}，样本数: {len(model_df)}")
+        
+        # 如果需要生成PCAP文件
+        if generate_pcap:
+            pcap_path = os.path.join(output_dir, "simulated_traffic.pcap")
+            if self._save_pcap_file(raw_samples, pcap_path):
+                self.logger.info(f"PCAP文件已生成: {pcap_path}")
+            else:
+                self.logger.error("PCAP文件生成失败")
         
         # 分割训练集和测试集
         if split_train_test and test_size > 0:

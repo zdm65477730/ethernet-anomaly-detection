@@ -480,8 +480,7 @@ class AutoMLTrainer:
                 evaluation_metrics=metrics,
                 protocol=protocol,
                 feature_importance=feature_importance,
-                model_factory=self.model_factory,
-                request_model_change=True  # 请求模型更换建议
+                model_factory=self.model_factory
             )
             
             # 记录优化建议

@@ -1,8 +1,10 @@
 import os
+import json
+from typing import Optional, List
+import datetime
+from datetime import datetime as datetime_obj
 import sys
 import logging
-import json
-from typing import List, Dict, Optional
 import numpy as np
 import pandas as pd
 
@@ -162,65 +164,72 @@ def generate_report(
                 json.dump(report_data, f, ensure_ascii=False, indent=2)
         
         print_success(f"报告已生成: {output}")
-        if visualization_paths:
-            print_info(f"可视化图表已生成:")
-            for path in visualization_paths:
-                print_info(f"  - {path}")
-        elif report_data["report_type"] == "detection" and visualize:
-            print_info("尝试生成可视化图表...")
-            try:
-                # 即使没有自动生成，也尝试生成可视化图表
-                visualizer = DetectionVisualizer(output_dir=os.path.dirname(output) or ".")
-                chart_paths = []
-                
-                # 获取检测结果数据
-                detection_results = report_data.get("detection_results", report_data.get("anomalies", []))
-                print_info(f"使用 {len(detection_results)} 条检测结果生成图表")
-                
-                # 生成各类图表
+        
+        # 生成可视化图表（如果需要）
+        if visualize:
+            if visualization_paths:
+                print_info(f"可视化图表已生成:")
+                for path in visualization_paths:
+                    print_info(f"  - {path}")
+            elif report_data["report_type"] == "detection":
+                print_info("尝试生成可视化图表...")
                 try:
-                    anomaly_path = visualizer.plot_anomaly_distribution_over_time(
-                        detection_results, 
-                        show=False)
-                    if anomaly_path:
-                        chart_paths.append(anomaly_path)
+                    # 即使没有自动生成，也尝试生成可视化图表
+                    visualizer = DetectionVisualizer(output_dir=os.path.dirname(output) or ".")
+                    chart_paths = []
+                    
+                    # 获取检测结果数据
+                    detection_results = report_data.get("detection_results", report_data.get("anomalies", []))
+                    print_info(f"使用 {len(detection_results)} 条检测结果生成图表")
+                    
+                    # 生成各类图表
+                    try:
+                        anomaly_path = visualizer.plot_anomaly_distribution_over_time(
+                            detection_results, 
+                            show=False)
+                        if anomaly_path:
+                            chart_paths.append(anomaly_path)
+                    except Exception as e:
+                        logger.warning(f"生成异常时间分布图失败: {e}")
+                    
+                    try:
+                        protocol_path = visualizer.plot_protocol_distribution(
+                            detection_results, 
+                            show=False)
+                        if protocol_path:
+                            chart_paths.append(protocol_path)
+                    except Exception as e:
+                        logger.warning(f"生成协议分布图失败: {e}")
+                    
+                    try:
+                        score_path = visualizer.plot_anomaly_score_distribution(
+                            detection_results, 
+                            show=False)
+                        if score_path:
+                            chart_paths.append(score_path)
+                    except Exception as e:
+                        logger.warning(f"生成异常分数分布图失败: {e}")
+                    
+                    try:
+                        top_path = visualizer.plot_top_anomalies(
+                            detection_results, 
+                            show=False)
+                        if top_path:
+                            chart_paths.append(top_path)
+                    except Exception as e:
+                        logger.warning(f"生成Top异常图失败: {e}")
+                    
+                    if chart_paths:
+                        print_info(f"可视化图表已生成:")
+                        for path in chart_paths:
+                            print_info(f"  - {path}")
+                    else:
+                        print_warning("未能生成任何可视化图表")
                 except Exception as e:
-                    logger.warning(f"生成异常时间分布图失败: {e}")
-                
-                try:
-                    protocol_path = visualizer.plot_protocol_distribution(
-                        detection_results, 
-                        show=False)
-                    if protocol_path:
-                        chart_paths.append(protocol_path)
-                except Exception as e:
-                    logger.warning(f"生成协议分布图失败: {e}")
-                
-                try:
-                    score_path = visualizer.plot_anomaly_score_distribution(
-                        detection_results, 
-                        show=False)
-                    if score_path:
-                        chart_paths.append(score_path)
-                except Exception as e:
-                    logger.warning(f"生成异常分数分布图失败: {e}")
-                
-                try:
-                    top_path = visualizer.plot_top_anomalies(
-                        detection_results, 
-                        show=False)
-                    if top_path:
-                        chart_paths.append(top_path)
-                except Exception as e:
-                    logger.warning(f"生成Top异常图失败: {e}")
-                
-                if chart_paths:
-                    print_info(f"可视化图表已生成:")
-                    for path in chart_paths:
-                        print_info(f"  - {path}")
-            except Exception as e:
-                logger.error(f"生成可视化图表失败: {e}")
-                print_error(f"生成可视化图表失败: {e}")
+                    logger.error(f"生成可视化图表时出错: {e}")
+                    print_error(f"生成可视化图表时出错: {e}")
+            elif report_data["report_type"] == "evaluation" and report_data.get("confusion_matrix"):
+                visualization_paths = _generate_visualizations(report_data, os.path.dirname(output))
         
     except Exception as e:
         logger.error(f"生成报告失败: {str(e)}", exc_info=True)
@@ -266,15 +275,15 @@ def _generate_detection_report(config: ConfigManager, start_time: datetime, end_
     # 查找指定时间范围内的检测报告
     detections_dir = config.get("reports.detections_dir", "reports/detections")
     
-    # 首先检查是否有测试数据
-    test_data_path = os.path.join(detections_dir, 'sample_test_data.json')
-    if os.path.exists(test_data_path):
+    # 首先检查实时检测结果文件
+    realtime_results_path = os.path.join(detections_dir, 'realtime_detection_results.json')
+    if os.path.exists(realtime_results_path):
         try:
-            with open(test_data_path, 'r', encoding='utf-8') as f:
-                report_data = json.load(f)
+            with open(realtime_results_path, 'r', encoding='utf-8') as f:
+                detection_results = json.load(f)
             
-            # 包装测试数据
-            anomalies = [item for item in report_data if isinstance(item, dict) and item.get("is_anomaly", False)]
+            # 包装检测结果
+            anomalies = [item for item in detection_results if isinstance(item, dict) and item.get("is_anomaly", False)]
             now = datetime.now()
             report_data = {
                 "report_type": "detection",
@@ -284,25 +293,25 @@ def _generate_detection_report(config: ConfigManager, start_time: datetime, end_
                     "end": end_time.isoformat()
                 },
                 "summary": {
-                    "total_packets": len(report_data),
-                    "total_sessions": len(report_data),
+                    "total_packets": len(detection_results),
+                    "total_sessions": len(detection_results),
                     "anomalies_detected": len(anomalies),
-                    "anomaly_rate": f"{len(anomalies)/len(report_data)*100:.2f}%" if report_data else "0%"
+                    "anomaly_rate": f"{len(anomalies)/len(detection_results)*100:.2f}%" if detection_results else "0%"
                 },
                 "anomalies": anomalies,
-                "detection_results": report_data
+                "detection_results": detection_results
             }
-            print_info(f"使用测试数据生成报告，包含 {len(report_data['detection_results'])} 条记录")
+            print_info(f"使用实时检测数据生成报告，包含 {len(detection_results)} 条记录")
             return report_data
         except Exception as e:
-            logger.warning(f"读取测试数据失败 {test_data_path}: {e}")
+            logger.warning(f"读取实时检测数据失败 {realtime_results_path}: {e}")
     
     # 如果目录存在，尝试查找最近的报告
     if os.path.exists(detections_dir):
         # 查找在时间范围内的报告
         report_files = []
         for file in os.listdir(detections_dir):
-            if file.endswith('.json') and file != 'sample_test_data.json':  # 排除测试数据
+            if file.endswith('.json') and file != 'realtime_detection_results.json':  # 排除实时检测结果文件
                 file_path = os.path.join(detections_dir, file)
                 try:
                     file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
@@ -354,8 +363,8 @@ def _generate_detection_report(config: ConfigManager, start_time: datetime, end_
             except Exception as e:
                 logger.warning(f"读取检测报告失败 {latest_report_path}: {e}")
     
-    # 如果没有找到现有报告，返回示例数据
-    logger.info("未找到匹配的检测报告，使用示例数据")
+    # 如果没有找到现有报告，返回空数据而不是示例数据
+    logger.info("未找到匹配的检测报告，使用空数据")
     return {
         "report_type": "detection",
         "generated_at": datetime.now().isoformat(),
@@ -364,36 +373,13 @@ def _generate_detection_report(config: ConfigManager, start_time: datetime, end_
             "end": end_time.isoformat()
         },
         "summary": {
-            "total_packets": 10000,
-            "total_sessions": 500,
-            "anomalies_detected": 25,
-            "anomaly_rate": "0.25%"
+            "total_packets": 0,
+            "total_sessions": 0,
+            "anomalies_detected": 0,
+            "anomaly_rate": "0%"
         },
-        "anomalies": [
-            {
-                "timestamp": (start_time + timedelta(minutes=30)).isoformat(),
-                "source_ip": "192.168.1.100",
-                "destination_ip": "10.0.0.1",
-                "protocol": "TCP",
-                "anomaly_type": "SYN Flood",
-                "severity": "high",
-                "details": "异常高的SYN包发送速率"
-            },
-            {
-                "timestamp": (start_time + timedelta(hours=2)).isoformat(),
-                "source_ip": "192.168.1.200",
-                "destination_ip": "8.8.8.8",
-                "protocol": "UDP",
-                "anomaly_type": "Port Scan",
-                "severity": "medium",
-                "details": "短时间内扫描多个端口"
-            }
-        ],
-        "top_anomalous_ips": [
-            {"ip": "192.168.1.100", "count": 15},
-            {"ip": "192.168.1.200", "count": 8},
-            {"ip": "10.0.0.50", "count": 2}
-        ]
+        "anomalies": [],
+        "detection_results": []
     }
 
 def _generate_evaluation_report(config: ConfigManager, start_time: datetime, end_time: datetime) -> dict:
@@ -731,7 +717,7 @@ def _save_html_report(report_data: dict, output_path: str, chart_paths: List[str
 
         <p><strong>生成时间:</strong> {report_data.get('generated_at', 'N/A')}</p>
 """
-    
+
     # 添加时间范围
     time_range = report_data.get('time_range', {})
     if time_range:
@@ -767,11 +753,11 @@ def _save_html_report(report_data: dict, output_path: str, chart_paths: List[str
             <div class="metric-label">异常率</div>
         </div>
 """.format(
-            total_packets=summary.get('total_packets', 'N/A'),
-            total_sessions=summary.get('total_sessions', 'N/A'),
-            anomalies_detected=summary.get('anomalies_detected', 'N/A'),
-            anomaly_rate=summary.get('anomaly_rate', 'N/A')
-        )
+                total_packets=summary.get('total_packets', 'N/A'),
+                total_sessions=summary.get('total_sessions', 'N/A'),
+                anomalies_detected=summary.get('anomalies_detected', 'N/A'),
+                anomaly_rate=summary.get('anomaly_rate', 'N/A')
+            )
     
     # 如果是评估报告
     elif report_type == "evaluation":
@@ -811,73 +797,48 @@ def _save_html_report(report_data: dict, output_path: str, chart_paths: List[str
         # 添加混淆矩阵
         if "confusion_matrix" in report_data:
             cm = report_data["confusion_matrix"]
-            html_content += """
+            html_content += f"""
         <h2>混淆矩阵</h2>
         <table>
-            <thead>
-                <tr>
-                    <th></th>
-                    <th>预测正常</th>
-                    <th>预测异常</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td><strong>实际正常</strong></td>
-                    <td>{}</td>
-                    <td>{}</td>
-                </tr>
-                <tr>
-                    <td><strong>实际异常</strong></td>
-                    <td>{}</td>
-                    <td>{}</td>
-                </tr>
-            </tbody>
-        </table>
-""".format(cm.get("true_negative", 0), cm.get("false_positive", 0), 
-           cm.get("false_negative", 0), cm.get("true_positive", 0))
-        
-        # 添加特征重要性
-        if "feature_importance" in report_data:
-            html_content += """
-        <h2>特征重要性</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>特征</th>
-                    <th>重要性</th>
-                </tr>
-            </thead>
-            <tbody>
-"""
-            for feature, importance in report_data["feature_importance"].items():
-                html_content += f"""
-                <tr>
-                    <td>{feature}</td>
-                    <td>{importance:.3f}</td>
-                </tr>
-"""
-            html_content += """
-            </tbody>
+            <tr>
+                <th>实际\预测</th>
+                <th>正常</th>
+                <th>异常</th>
+            </tr>
+            <tr>
+                <td><strong>正常</strong></td>
+                <td>{cm[0][0]}</td>
+                <td>{cm[0][1]}</td>
+            </tr>
+            <tr>
+                <td><strong>异常</strong></td>
+                <td>{cm[1][0]}</td>
+                <td>{cm[1][1]}</td>
+            </tr>
         </table>
 """
     
-    # 添加可视化图表
+    # 添加图表
     if chart_paths:
         html_content += """
-        <h2>检测结果可视化</h2>
+        <h2>可视化图表</h2>
+        <div class="chart-container">
 """
         for chart_path in chart_paths:
-            # 获取相对路径用于HTML显示
-            relative_path = os.path.relpath(chart_path, os.path.dirname(output_path))
+            # 提取文件名用于显示
+            chart_name = os.path.basename(chart_path)
             html_content += f"""
-        <div class="chart-container">
-            <img src="{relative_path}" alt="检测图表">
+            <div>
+                <img src="{chart_path}" alt="{chart_name}">
+            </div>
+"""
+        html_content += """
         </div>
 """
     
-    # 添加异常检测详细信息表格
-    html_content += """
+    # 添加检测报告内容
+    if report_data["report_type"] == "detection":
+        html_content += """
         <h2>检测到的异常</h2>
         <table>
             <thead>
@@ -911,27 +872,117 @@ def _save_html_report(report_data: dict, output_path: str, chart_paths: List[str
                     # 处理可能的毫秒时间戳
                     if timestamp > 1e10:  # 如果是毫秒时间戳
                         timestamp = timestamp / 1000
-                    timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                    timestamp = datetime_obj.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
                 elif timestamp == 'N/A':
                     timestamp = 'N/A'
                 
-                # 处理IP地址字段
-                src_ip = record.get('src_ip', record.get('source_ip', 'N/A'))
-                dst_ip = record.get('dst_ip', record.get('destination_ip', 'N/A'))
+                # 处理IP地址字段（支持多种字段名称）
+                src_ip = (record.get('src_ip') or 
+                         record.get('source_ip') or 
+                         record.get('src_address') or 
+                         record.get('source_address') or 
+                         record.get('src_addr') or
+                         'N/A')
                 
-                # 处理协议字段
-                protocol = record.get('protocol', record.get('proto', 'N/A'))
+                dst_ip = (record.get('dst_ip') or 
+                         record.get('destination_ip') or 
+                         record.get('dst_address') or 
+                         record.get('destination_address') or 
+                         record.get('dst_addr') or
+                         'N/A')
                 
-                # 处理异常类型
-                anomaly_type = record.get('detection_method', 'N/A')
+                # 处理协议字段（支持多种字段名称）
+                protocol = (record.get('protocol') or 
+                           record.get('proto') or 
+                           record.get('protocol_name') or
+                           record.get('protocol_type') or
+                           'N/A')
                 
-                # 处理严重性
-                severity = f"{record.get('anomaly_score', 0):.3f}" if 'anomaly_score' in record else 'N/A'
+                # 处理异常类型（支持多种字段名称）
+                anomaly_type = (record.get('anomaly_type') or 
+                               record.get('detection_method') or 
+                               record.get('type') or 
+                               record.get('anomaly_category') or
+                               'N/A')
+                
+                # 处理严重性（异常分数）
+                severity = 'N/A'
+                if 'anomaly_score' in record:
+                    severity = f"{record['anomaly_score']:.3f}"
+                elif 'score' in record:
+                    severity = f"{record['score']:.3f}"
                 
                 # 处理详情
-                threshold = record.get('threshold_used', 'N/A')
-                details = f"阈值: {threshold}" if threshold != 'N/A' else 'N/A'
+                threshold = (record.get('threshold_used') or 
+                            record.get('threshold') or 
+                            'N/A')
                 
+                # 尝试从多个字段获取详情信息
+                details = (record.get('details') or
+                          record.get('description') or
+                          f"阈值: {threshold}" if threshold != 'N/A' else 'N/A')
+                
+                # 如果仍然没有详情，则从可用字段构建
+                if details == 'N/A':
+                    details_parts = []
+                    if threshold != 'N/A':
+                        details_parts.append(f"阈值: {threshold}")
+                    
+                    # 添加一些统计信息作为详情
+                    flow_stats = []
+                    if 'packet_count' in record:
+                        flow_stats.append(f"数据包: {int(record['packet_count'])}")
+                    if 'byte_count' in record:
+                        flow_stats.append(f"字节: {int(record['byte_count'])}")
+                    if 'flow_duration' in record:
+                        flow_stats.append(f"持续时间: {record['flow_duration']:.2f}s")
+                    
+                    if flow_stats:
+                        details_parts.append("流量统计: " + ", ".join(flow_stats))
+                    
+                    # 添加检测方法信息
+                    if record.get('detection_method'):
+                        details_parts.append(f"检测方法: {record['detection_method']}")
+                    
+                    details = "; ".join(details_parts) if details_parts else 'N/A'
+                
+                # 如果IP地址缺失，尝试从其他字段推断
+                # 处理源IP和目标IP的显示
+                if src_ip == 'N/A' and dst_ip == 'N/A':
+                    # 检查是否有会话相关信息
+                    session_info = []
+                    if 'session_id' in record:
+                        session_info.append(f"会话ID: {record['session_id']}")
+                    if session_info:
+                        src_ip = "会话信息: " + ", ".join(session_info)
+                        dst_ip = "N/A"
+                    else:
+                        # 如果没有任何标识信息，则显示记录索引
+                        src_ip = f"记录 #{list(anomalies).index(record) + 1}"
+                        dst_ip = "N/A"
+                if src_ip != 'N/A' and dst_ip == 'N/A':
+                    # 只有源IP时，目标IP显示为"未知"
+                    dst_ip = "未知"
+                elif src_ip == 'N/A' and dst_ip != 'N/A':
+                    # 只有目标IP时，源IP显示为"未知"
+                    src_ip = "未知"
+                
+                # 如果协议信息缺失但有检测方法信息，则使用检测方法作为协议信息
+                if protocol == 'N/A' and record.get('detection_method'):
+                    # 从检测方法中提取协议信息
+                    detection_method = record.get('detection_method')
+                    if 'random_forest' in detection_method:
+                        protocol = 'RandomForest'
+                    elif 'xgboost' in detection_method:
+                        protocol = 'XGBoost'
+                    elif 'lstm' in detection_method:
+                        protocol = 'LSTM'
+                    elif 'mlp' in detection_method:
+                        protocol = 'MLP'
+                    else:
+                        protocol = detection_method
+                
+                # 添加表格行
                 html_content += f"""
                 <tr>
                     <td>{timestamp}</td>
@@ -943,26 +994,25 @@ def _save_html_report(report_data: dict, output_path: str, chart_paths: List[str
                     <td>{details}</td>
                 </tr>
 """
-    else:
-        # 如果没有异常记录，显示提示信息
-        html_content += """
-                <tr>
-                    <td colspan="7" style="text-align: center;">未检测到异常</td>
-                </tr>
-"""
     
-    html_content += """
+    # 关闭检测报告表格
+    if report_data["report_type"] == "detection":
+        html_content += """
             </tbody>
         </table>
-
-    </div>
-</body>
-</html>
 """
     
+    # 关闭HTML标签
+    html_content += """
+    </div>
+</body>
+</html>"""
+    
     # 写入文件
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-
-if __name__ == "__main__":
-    app()
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        logger.info(f"HTML报告已保存到 {output_path}")
+    except Exception as e:
+        logger.error(f"保存HTML报告时出错: {e}")
+        raise

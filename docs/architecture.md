@@ -297,6 +297,9 @@ anomaly-detector stop
 
 # 查看系统状态
 anomaly-detector status
+
+# 查看当前异常类型分布配置
+anomaly-detector config get-anomaly-distribution
 ```
 
 ### 8.2 模型训练命令
@@ -349,6 +352,22 @@ anomaly-detector feedback list
 
 # 清理旧反馈数据
 anomaly-detector feedback cleanup
+```
+
+### 8.6 异常分布管理命令
+
+```bash
+# 设置异常类型分布
+anomaly-detector config set-anomaly-distribution --distribution '{"normal": 0.7, "syn_flood": 0.1, "port_scan": 0.1, "udp_amplification": 0.05, "icmp_flood": 0.05}'
+
+# 启用复合异常生成
+anomaly-detector config enable-composite-anomalies
+
+# 禁用复合异常生成
+anomaly-detector config disable-composite-anomalies
+
+# 设置复合异常比例
+anomaly-detector config set-composite-ratio 0.2
 ```
 
 ### 8.6 报告生成命令

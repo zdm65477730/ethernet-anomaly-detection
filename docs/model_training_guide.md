@@ -55,48 +55,42 @@ anomaly-detector train once --model lstm
 anomaly-detector train once --data /path/to/training/data
 ```
 
-### 3.4 设置测试集比例
+### 3.4 自动生成训练数据
 
-使用`--test-size`或`-t`参数设置测试集比例（0-1之间）：
+如果没有现成的训练数据，系统可以自动生成模拟数据：
 ```bash
-anomaly-detector train once --test-size 0.3
+anomaly-detector train once --generate-data --samples 10000
 ```
 
-### 3.5 使用交叉验证
+### 3.5 指定异常类型分布
 
-使用`--cv`或`-k`参数指定交叉验证折数：
+在生成训练数据时，可以使用`--anomaly-types`参数指定异常类型及其占比：
 ```bash
-anomaly-detector train once --cv 5
+anomaly-detector train once --generate-data --samples 10000 --anomaly-types '{"normal": 0.7, "syn_flood": 0.1, "port_scan": 0.1, "udp_amplification": 0.05, "icmp_flood": 0.05}'
 ```
 
-### 3.6 指定输出目录
+支持的异常类型包括：
+- `normal` - 正常流量
+- `syn_flood` - SYN洪水攻击
+- `port_scan` - 端口扫描
+- `udp_amplification` - UDP放大攻击
+- `icmp_flood` - ICMP洪水攻击
+- `large_payload` - 大载荷攻击
+- `unusual_flags` - 异常TCP标志
 
-使用`--output`或`-o`参数指定模型输出目录：
-```bash
-anomaly-detector train once --output /path/to/model/output
-```
-
-### 3.7 自动优化
-
-使用`--auto-optimize`或`-a`参数在训练后自动进行优化：
-```bash
-anomaly-detector train once --auto-optimize
-```
-
-### 3.8 完整示例
+### 3.6 完整示例
 
 ```bash
 anomaly-detector train once \
   --model xgboost \
-  --data ./data/processed \
-  --test-size 0.2 \
-  --cv 5 \
-  --output ./models \
+  --data ./data/processed/model_features_data.csv \
   --auto-optimize \
   --log-level INFO
 ```
 
-## 4. 持续训练模式
+## 4. 持续训练
+
+持续训练模式会定期检查新数据并增量更新模型。
 
 ### 4.1 启动持续训练
 
@@ -290,8 +284,7 @@ data/
 
 如果需要生成模拟训练数据进行测试：
 ```bash
-anomaly-detector train once
-# 当提示数据路径不存在时，选择生成模拟数据
+anomaly-detector generate-test-data --count 10000 --anomaly-types '{"normal": 0.7, "syn_flood": 0.1, "port_scan": 0.1, "udp_amplification": 0.05, "icmp_flood": 0.05}'
 ```
 
 ## 10. 反馈优化机制

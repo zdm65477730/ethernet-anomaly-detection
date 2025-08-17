@@ -118,7 +118,7 @@ class TestTemporalFeatureExtractor(unittest.TestCase):
     
     def setUp(self):
         """初始化测试环境"""
-        self.extractor = TemporalFeatureExtractor(window_sizes=[10, 30])
+        self.extractor = TemporalFeatureExtractor(window_sizes=[10, 30, 60])  # 增加一个典型的窗口大小
         # 创建模拟数据包流
         self.packet_stream = [
             {'timestamp': 1620000000.0, 'length': 100, 'protocol': 6},

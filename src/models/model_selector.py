@@ -19,7 +19,7 @@ class ModelSelector(BaseComponent):
         # 模型性能历史记录路径
         self.models_dir = self.config.get("model.models_dir", "models")
         self.performance_history_path = os.path.join(
-            self.models_dir, "protocol_model_performance.json"
+            "config", "protocol_model_performance.json"
         )
         
         # 确保模型目录存在

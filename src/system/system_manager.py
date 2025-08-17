@@ -1,22 +1,25 @@
-import time
+"""
+系统管理器
+"""
 import threading
-import traceback
+import time
 import os
-from typing import List, Dict, Optional, Any
-from src.system.base_component import BaseComponent
-from src.config.config_manager import ConfigManager
+import traceback
+from typing import Dict, Any, Optional, List
 from src.utils.logger import get_logger
-from src.monitoring.monitor import SystemMonitor
+from src.config.config_manager import ConfigManager
 from src.capture.packet_capture import PacketCapture
 from src.capture.session_tracker import SessionTracker
-from src.capture.traffic_analyzer import TrafficAnalyzer
-from src.features.stat_extractor import StatFeatureExtractor
-from src.features.temporal_extractor import TemporalFeatureExtractor
+from src.analysis.traffic_analyzer import TrafficAnalyzer
+from src.detection.anomaly_detector import AnomalyDetector
 from src.models.model_factory import ModelFactory
 from src.models.model_selector import ModelSelector
-from src.detection.anomaly_detector import AnomalyDetector
 from src.detection.alert_manager import AlertManager
 from src.detection.feedback_processor import FeedbackProcessor
+from src.monitoring.monitor import SystemMonitor
+from src.system.base_component import BaseComponent
+
+logger = get_logger(__name__)
 
 class SystemManager(BaseComponent):
     """系统管理器，负责初始化、启动、停止所有组件，并监控组件状态"""
@@ -129,42 +132,40 @@ class SystemManager(BaseComponent):
         else:
             self.logger.debug("组件监控线程已正常终止")
     
-    def _initialize_components(self) -> None:
+    def _initialize_components(self):
         """初始化所有系统组件"""
         try:
-            # 监控组件（独立运行）
-            self._components["monitor"] = SystemMonitor()
+            self.logger.info("开始初始化系统组件")
             
-            # 数据采集组件
-            self._components["packet_capture"] = PacketCapture()
+            # 初始化监控组件（如果启用）
+            if self.config.get("monitoring.enabled", True):
+                self._components["monitor"] = SystemMonitor(self.config)
             
-            # 会话跟踪组件
-            self._components["session_tracker"] = SessionTracker()
+            # 按依赖顺序初始化组件
+            # 1. 初始化数据捕获组件
+            self._components["packet_capture"] = PacketCapture(self.config)
             
-            # 流量分析组件
-            self._components["traffic_analyzer"] = TrafficAnalyzer()
+            # 2. 初始化会话跟踪组件
+            self._components["session_tracker"] = SessionTracker(self.config)
             
-            # 检测与告警组件
-            self._components["anomaly_detector"] = AnomalyDetector(
-                config=self.config
+            # 3. 初始化异常检测组件
+            self._components["anomaly_detector"] = AnomalyDetector(self.config)
+            
+            # 4. 初始化流量分析组件
+            session_tracker = self._components["session_tracker"]
+            anomaly_detector = self._components["anomaly_detector"]
+            self._components["traffic_analyzer"] = TrafficAnalyzer(
+                session_tracker=session_tracker,
+                anomaly_detector=anomaly_detector
             )
             
-            # 模型相关组件
-            self._components["model_factory"] = ModelFactory(
-                config=self.config
-            )
-            self._components["model_selector"] = ModelSelector(
-                config=self.config
-            )
+            # 5. 初始化模型相关组件
+            self._components["model_factory"] = ModelFactory(self.config)
+            self._components["model_selector"] = ModelSelector(self.config)
             
-            self._components["alert_manager"] = AlertManager(
-                config=self.config
-            )
-            
-            # 反馈处理组件
-            self._components["feedback_processor"] = FeedbackProcessor(
-                config=self.config
-            )
+            # 6. 初始化告警和反馈组件
+            self._components["alert_manager"] = AlertManager(self.config)
+            self._components["feedback_processor"] = FeedbackProcessor(self.config)
             
             self.logger.info("所有组件初始化完成")
             
@@ -212,16 +213,18 @@ class SystemManager(BaseComponent):
                 return True
                 
             self.logger.debug(f"正在启动组件: {component_name}")
-            # 对于start方法没有返回值的组件，我们假设启动成功
-            component.start()
-            # 检查组件是否标记为运行状态
-            success = component.is_running
-            if success:
-                self.logger.info(f"组件 {component_name} 已启动")
-            else:
-                self.logger.error(f"组件 {component_name} 启动后未标记为运行状态")
-            return success
             
+            # 启动组件
+            result = component.start()
+            
+            # 检查启动结果
+            if result is False:
+                self.logger.error(f"组件 {component_name} 启动失败")
+                return False
+                
+            self.logger.info(f"组件 {component_name} 启动成功")
+            return True
+                
         except Exception as e:
             self.logger.error(f"启动组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
             return False
@@ -247,102 +250,93 @@ class SystemManager(BaseComponent):
             self.logger.error(f"停止组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
             return False
 
-    def start(self, interface=None, bpf_filter=None, offline_file=None) -> bool:
-        """
-        启动系统
-        
-        Args:
-            interface: 网络接口名称
-            bpf_filter: BPF过滤规则
-            offline_file: 离线pcap文件路径
-            
-        Returns:
-            bool: 启动是否成功
-        """
+    def start_system(self, **kwargs):
+        """启动系统及所有组件"""
         try:
             self.logger.info("开始启动系统")
             
-            # 重置停止标志
-            self._stopping = False
-            SystemManager._stopping = False
-            
-            # 重置SystemMonitor的全局停止标志
-            try:
-                SystemMonitor._force_stopped = False
-                SystemMonitor._global_stopped = False
-            except:
-                pass
-            
-            # 首先启动监控组件
+            # 启动监控组件（如果启用）
             if "monitor" in self._components:
-                self._start_component("monitor")
-            
-            # 获取组件启动顺序
-            start_order = self._get_component_start_order()
-            # 移除monitor组件，因为它已经启动了
-            start_order = [c for c in start_order if c != "monitor"]
-            self.logger.info(f"组件启动顺序: {start_order}")
-            
-            # 按顺序启动组件
-            for component_name in start_order:
-                # 特殊处理需要参数的组件
-                if component_name == "packet_capture":
-                    try:
-                        component = self._components[component_name]
-                        # 设置组件参数而不是传递给start方法
-                        if offline_file:
-                            # 离线模式
-                            component.set_offline_file(offline_file)
-                        else:
-                            # 在线模式
-                            component.set_interface(interface or self.config.get("network.interface", "eth0"))
-                            if bpf_filter or self.config.get("network.filter"):
-                                component.set_filter(bpf_filter or self.config.get("network.filter"))
-                        
-                        # 启动组件（不带参数）
-                        success = self._start_component(component_name)
-                        if success:
-                            self.logger.info(f"组件 {component_name} 已启动")
-                        else:
-                            self.logger.error(f"组件 {component_name} 启动失败")
-                    except Exception as e:
-                        self.logger.error(f"启动组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
-                        return False
-                elif component_name == "traffic_analyzer":
-                    # TrafficAnalyzer需要session_tracker参数
-                    try:
-                        component = self._components[component_name]
-                        session_tracker = self._components.get("session_tracker")
-                        if not session_tracker:
-                            self.logger.error("无法获取session_tracker组件")
-                            return False
-                            
-                        # 启动组件并传递session_tracker参数
-                        success = component.start(session_tracker=session_tracker)
-                        if success:
-                            self.logger.info(f"组件 {component_name} 已启动")
-                        else:
-                            self.logger.error(f"组件 {component_name} 启动失败")
-                    except Exception as e:
-                        self.logger.error(f"启动组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
-                        return False
+                if self._start_component("monitor"):
+                    self.logger.info("组件 monitor 启动成功")
                 else:
-                    # 启动其他组件
-                    if not self._start_component(component_name):
-                        return False
+                    self.logger.error("组件 monitor 启动失败")
             
-            # 启动组件监控线程
-            self._start_monitoring_thread()
+            # 按顺序启动其他组件
+            component_order = [
+                "packet_capture", 
+                "session_tracker", 
+                "traffic_analyzer", 
+                "anomaly_detector", 
+                "model_factory", 
+                "model_selector",
+                "alert_manager", 
+                "feedback_processor"
+            ]
             
-            # 调用父类的start方法
-            super().start()
+            self.logger.info(f"组件启动顺序: {component_order}")
+            
+            for component_name in component_order:
+                if component_name in self._components:
+                    # 启动组件
+                    if self._start_component(component_name):
+                        self.logger.info(f"组件 {component_name} 启动成功")
+                    else:
+                        self.logger.error(f"组件 {component_name} 启动失败")
+                        # 可以选择是否继续启动其他组件
+                        continue
+                else:
+                    self.logger.debug(f"组件 {component_name} 不存在，跳过启动")
+            
+            # 连接组件
+            self._connect_components()
             
             self.logger.info("系统启动完成")
+            self._is_running = True
             return True
             
         except Exception as e:
-            self.logger.error(f"系统启动失败: {str(e)}", exc_info=True)
+            self.logger.error(f"启动系统时出现异常: {str(e)}", exc_info=True)
             return False
+    
+    def _connect_components(self):
+        """连接各个组件"""
+        try:
+            self.logger.info("开始建立组件连接")
+            
+            # 连接packet_capture和session_tracker
+            packet_capture = self._components.get("packet_capture")
+            session_tracker = self._components.get("session_tracker")
+            if packet_capture and session_tracker:
+                packet_capture.session_tracker = session_tracker
+                self.logger.debug("已连接 packet_capture 到 session_tracker")
+            
+            # 连接session_tracker和traffic_analyzer
+            traffic_analyzer = self._components.get("traffic_analyzer")
+            if session_tracker and traffic_analyzer:
+                # 检查方法是否存在
+                if hasattr(traffic_analyzer, 'enqueue_session'):
+                    session_tracker.set_data_callback(traffic_analyzer.enqueue_session)
+                    self.logger.debug("已连接 session_tracker 到 traffic_analyzer")
+                else:
+                    self.logger.warning("无法建立session_tracker到traffic_analyzer的连接：traffic_analyzer或enqueue_session方法不存在")
+            else:
+                self.logger.warning("无法建立session_tracker到traffic_analyzer的连接：组件不存在")
+            
+            # 连接traffic_analyzer和anomaly_detector
+            anomaly_detector = self._components.get("anomaly_detector")
+            if traffic_analyzer and anomaly_detector:
+                # 直接共享特征队列
+                if hasattr(traffic_analyzer, 'features_queue') and hasattr(anomaly_detector, 'features_queue'):
+                    traffic_analyzer.features_queue = anomaly_detector.features_queue
+                    self.logger.debug("已连接 traffic_analyzer 到 anomaly_detector")
+                else:
+                    self.logger.warning("无法建立traffic_analyzer到anomaly_detector的连接：组件缺少features_queue属性")
+            else:
+                self.logger.warning("无法建立traffic_analyzer到anomaly_detector的连接：组件不存在")
+                
+        except Exception as e:
+            self.logger.error(f"连接组件时出错: {e}")
 
     def _monitor_components(self):
         """监控组件运行状态"""
@@ -358,6 +352,15 @@ class SystemManager(BaseComponent):
                     return
                 
                 try:
+                    # 检查是否是离线文件处理模式且处理已完成
+                    packet_capture = self._components.get("packet_capture")
+                    if (packet_capture and packet_capture.mode == "offline" and 
+                        hasattr(packet_capture, 'offline_processing_complete') and 
+                        packet_capture.offline_processing_complete):
+                        self.logger.info("离线文件处理完成，正在停止系统")
+                        self.stop()
+                        return
+                    
                     # 如果系统正在停止过程中，不尝试重启组件
                     if self._stopping or SystemManager._stopping:
                         self.logger.debug("系统正在停止过程中，监控线程即将退出")
@@ -403,6 +406,16 @@ class SystemManager(BaseComponent):
                             self.stop()
                             return
                             
+                        # 检查是否是离线文件处理模式且处理已完成
+                        packet_capture = self._components.get("packet_capture")
+                        if (packet_capture and packet_capture.mode == "offline" and 
+                            hasattr(packet_capture, 'offline_processing_complete') and 
+                            packet_capture.offline_processing_complete):
+                            self.logger.info("离线文件处理完成，正在停止系统")
+                            self.stop()
+                            return
+                            
+                        # 检查系统是否正在停止
                         if self._stopping or SystemManager._stopping:
                             self.logger.debug("系统正在停止过程中，监控线程即将退出")
                             return
@@ -413,6 +426,15 @@ class SystemManager(BaseComponent):
                     # 即使出错也要检查停止标志
                     if os.path.exists(stop_flag_file):
                         self.logger.info("检测到系统停止标志文件，正在停止系统")
+                        self.stop()
+                        return
+                        
+                    # 检查是否是离线文件处理模式且处理已完成
+                    packet_capture = self._components.get("packet_capture")
+                    if (packet_capture and packet_capture.mode == "offline" and 
+                        hasattr(packet_capture, 'offline_processing_complete') and 
+                        packet_capture.offline_processing_complete):
+                        self.logger.info("离线文件处理完成，正在停止系统")
                         self.stop()
                         return
                         
@@ -481,109 +503,44 @@ class SystemManager(BaseComponent):
 
     def stop(self):
         """停止系统"""
-        # 设置类级别的停止标志
-        self._stopping = True
-        SystemManager._stopping = True
+        if not self._is_running:
+            self.logger.info("系统未运行")
+            return True
+            
+        self.logger.info("开始停止系统")
+        self._is_running = False
         
-        # 设置全局停止标志文件
-        stop_flag_file = ".system_stop_flag"
-        try:
-            with open(stop_flag_file, "w") as f:
-                f.write("stop")
-        except Exception as e:
-            self.logger.warning(f"创建系统停止标志文件失败: {e}")
+        # 按相反顺序停止组件
+        start_order = self._get_component_start_order()
+        stop_order = list(reversed(start_order))  # 反转启动顺序作为停止顺序
+        self.logger.debug(f"组件停止顺序: {stop_order}")
         
-        # 设置SystemMonitor的全局停止标志
-        try:
-            from src.monitoring.monitor import SystemMonitor
-            SystemMonitor._force_stopped = True
-            SystemMonitor._global_stopped = True
-        except ImportError:
-            self.logger.warning("无法导入SystemMonitor类")
-            
-        try:
-            self.logger.info("开始停止系统")
-            
-            # 首先停止组件监控线程
-            self._stop_monitoring_thread()
-            
-            # 按与启动相反的顺序停止组件
-            start_order = self._get_component_start_order()
-            stop_order = list(reversed(start_order))
-            self.logger.debug(f"组件停止顺序: {stop_order}")
-            
-            # 首先停止监控组件以外的所有组件
-            non_monitor_components = [c for c in stop_order if c != "monitor"]
-            monitor_components = [c for c in stop_order if c == "monitor"]
-            
-            # 先停止非监控组件
-            for component_name in non_monitor_components:
+        for component_name in stop_order:
+            component = self._components.get(component_name)
+            if component:
                 try:
-                    self.logger.debug(f"正在停止组件: {component_name}")
-                    self._stop_component(component_name)
-                    self.logger.debug(f"组件 {component_name} 停止完成")
+                    # 特殊处理session_tracker，确保会话被刷新
+                    if component_name == "session_tracker":
+                        self.logger.info(f"正在刷新 {component_name} 的会话")
+                        component._flush_all_sessions()
+                    
+                    self._stop_component(component, component_name)
                 except Exception as e:
-                    self.logger.error(f"停止组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
-            
-            # 特别处理监控组件
-            for component_name in monitor_components:
-                try:
-                    self.logger.debug(f"正在停止监控组件: {component_name}")
-                    # 对监控组件进行特殊处理，确保其线程能正确终止
-                    if component_name in self._components:
-                        component = self._components[component_name]
-                        if hasattr(component, 'stop'):
-                            component.stop()
-                            
-                            # 特殊处理SystemMonitor组件
-                            from src.monitoring.monitor import SystemMonitor
-                            if isinstance(component, SystemMonitor):
-                                # 确保监控线程能尽快终止
-                                if hasattr(component, '_stop_event'):
-                                    component._stop_event.set()
-                                if hasattr(component, '_is_running'):
-                                    component._is_running = False
-                                
-                                # 等待监控线程结束，但避免在监控线程内部等待自身
-                                import threading
-                                if threading.current_thread() is not component._monitor_thread:
-                                    # 等待监控线程结束
-                                    if hasattr(component, '_monitor_thread') and component._monitor_thread:
-                                        monitor_thread = component._monitor_thread
-                                        if monitor_thread.is_alive():
-                                            self.logger.debug(f"等待监控组件线程结束，线程ID: {monitor_thread.ident}")
-                                            monitor_thread.join(timeout=5)  # 等待最多5秒
-                                            if monitor_thread.is_alive():
-                                                self.logger.warning("监控组件线程未能在超时时间内终止")
-                                            else:
-                                                self.logger.debug("监控组件线程已正常终止")
-                                        else:
-                                            self.logger.debug("监控组件线程不存在或已停止")
-                    self.logger.debug(f"监控组件 {component_name} 停止完成")
-                except Exception as e:
-                    self.logger.error(f"停止监控组件 {component_name} 时出现异常: {str(e)}", exc_info=True)
-            
-            # 最后停止系统管理器自身
-            super().stop()
-            self.logger.debug("系统管理器自身已停止")
-            
-            self.logger.info("系统已完全停止")
-            
-        except Exception as e:
-            self.logger.error(f"系统停止过程中出现异常: {str(e)}", exc_info=True)
+                    self.logger.error(f"停止组件 {component_name} 时出现异常: {e}")
+                    self.logger.debug(traceback.format_exc())
         
-        finally:
-            self._stopping = False  # 确保在最后将_stopping标志重置为False
-            SystemManager._stopping = False
-            
-            # 清理停止标志文件
-            try:
-                if os.path.exists(stop_flag_file):
-                    os.remove(stop_flag_file)
-            except Exception as e:
-                self.logger.warning(f"删除系统停止标志文件失败: {e}")
-            
-            self.logger.debug("系统停止流程完成，所有清理操作已执行")
+        # 清理资源
+        self._components.clear()
+        
+        # 清除停止标志文件
+        try:
+            if os.path.exists(self.STOP_FLAG_FILE):
+                os.remove(self.STOP_FLAG_FILE)
+        except Exception as e:
+            self.logger.warning(f"清除停止标志文件失败: {e}")
+        
+        self.logger.info("系统已完全停止")
+        return True
 
     def get_component(self, component_name: str) -> Optional[BaseComponent]:
         """获取指定组件实例"""

@@ -530,7 +530,7 @@ class FeedbackOptimizer:
     def save_optimization_history(self, filepath: Optional[str] = None):
         """保存优化历史记录"""
         if filepath is None:
-            reports_dir = self.config.get("training.report_dir", "reports/evaluations")
+            reports_dir = self.config.get("training.report_dir", "reports/optimizations")
             filepath = os.path.join(reports_dir, "optimization_history.json")
         
         # 确保目录存在

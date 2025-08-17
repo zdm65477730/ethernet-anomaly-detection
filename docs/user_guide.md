@@ -201,7 +201,29 @@ anomaly-detector generate-test-data
 
 # 生成指定数量的测试数据
 anomaly-detector generate-test-data --samples 5000
+
+# 生成测试数据并同时生成PCAP文件
+anomaly-detector generate-test-data --samples 5000 --pcap
+
+# 生成测试数据并指定异常类型分布
+anomaly-detector generate-test-data --samples 5000 --anomaly-types '{"normal": 0.7, "syn_flood": 0.1, "port_scan": 0.1, "udp_amplification": 0.05, "icmp_flood": 0.05}'
 ```
+
+生成的数据可以用于两个目的：
+1. **模型训练**：使用生成的CSV格式数据训练模型
+2. **异常检测验证**：使用生成的PCAP文件验证模型检测准确性
+
+#### 自定义异常类型分布
+
+系统支持通过 `--anomaly-types` 参数自定义生成数据中的异常类型分布。参数值为JSON格式字符串，定义各个异常类型的比例。支持的异常类型包括：
+
+- `normal`：正常流量
+- `syn_flood`：SYN洪水攻击
+- `port_scan`：端口扫描
+- `udp_amplification`：UDP放大攻击
+- `icmp_flood`：ICMP洪水攻击
+
+注意：所有类型的比例之和必须等于1.0。
 
 ### 模型训练
 
@@ -324,7 +346,7 @@ anomaly-detector report generate --last-hours 24 --format html --visualize
 
 ```bash
 # 1. 使用系统分析离线pcap文件
-anomaly-detector start --pcap-file /path/to/network_traffic.pcap
+anomaly-detector start --offline-file /path/to/network_traffic.pcap
 
 # 2. 等待分析完成（系统会自动停止）
 
@@ -403,33 +425,97 @@ anomaly-detector feedback list --limit 50
 anomaly-detector feedback cleanup --days 30
 ```
 
-### 完整的闭环优化流程示例
+### 完整工作流程示例
 
-以下是一个完整的闭环优化流程示例，展示如何通过反馈持续改进模型性能：
+#### 1. 从零开始训练和优化模型的完整闭环
 
-**第一次闭环优化：**
 ```bash
-# 1. 生成测试数据
-anomaly-detector generate-test-data --samples 50000 --output data/test/
+# 1. 初始化系统
+anomaly-detector init
 
-# 2. 训练模型
-anomaly-detector train --model xgboost --data data/test/model_features_data.csv
+# 2. 生成训练数据（同时生成PCAP文件）
+anomaly-detector generate-test-data --count 50000 --pcap --anomaly-types '{"normal": 0.6, "syn_flood": 0.15, "port_scan": 0.15, "udp_amplification": 0.05, "icmp_flood": 0.05}'
 
-# 3. 评估模型性能
-anomaly-detector train evaluate --type xgboost
+# 3. 训练模型
+anomaly-detector train --data data/processed/model_features_data.csv --model xgboost
 
-# 4. 查看生成的评估报告（假定报告名为reports/xgboost_evaluation_20250727_122142.json）
-#    根据报告中的检测结果ID提交反馈
-anomaly-detector feedback submit --detection-id DETECTION_001 --is-anomaly --anomaly-type "PortScan"
-anomaly-detector feedback submit --detection-id DETECTION_002 --no-anomaly
-anomaly-detector feedback submit --detection-id DETECTION_003 --is-anomaly --anomaly-type "DDoS"
+# 4. 评估模型
+anomaly-detector train evaluate
 
-# 5. 基于反馈优化模型
+# 5. 优化模型（基于评估报告）
+anomaly-detector train optimize --report reports/xgboost_evaluation_*.json
+
+# 6. 或者基于反馈数据进行优化
+# anomaly-detector train optimize --feedback-based
+
+# 7. 启动持续训练
+anomaly-detector train continuous --interval 300 --min-samples 500 --background
+
+# 8. 监控系统状态
+anomaly-detector status
+```
+
+#### 2. 抓取数据、异常检测和报告生成的完整闭环
+
+```bash
+# 1. 启动系统进行实时检测
+anomaly-detector start --interface eth0
+
+# 2. 或者分析离线pcap文件（使用之前生成的PCAP文件）
+anomaly-detector start --offline-file data/test/simulated_traffic.pcap
+
+# 3. 实时监控系统状态
+anomaly-detector status
+
+# 4. 查看检测日志
+tail -f logs/anomaly_detector.log
+
+# 5. 生成检测报告
+anomaly-detector report generate --last-hours 24 --format html --visualize
+
+# 6. 提交反馈（如有必要）
+anomaly-detector feedback submit --detection-id ALERT_12345 --is-anomaly true --anomaly-type "SYN Flood"
+
+# 7. 基于反馈优化模型
 anomaly-detector train optimize --feedback-based
 
-# 6. 再次训练优化后的模型
-anomaly-detector train --model xgboost --data data/test/model_features_data.csv
+# 8. 停止系统
+anomaly-detector stop
 ```
+
+### 3. 使用真实PCAP文件训练模型的完整工作流程
+
+```bash
+# 1. 初始化系统
+anomaly-detector init
+
+# 2. 从真实PCAP文件生成训练数据
+anomaly-detector pcap-to-csv --pcap-file /path/to/real_network_traffic.pcap --output data/processed --anomaly-types '{"normal": 0.8, "malware": 0.1, "ddos": 0.1}'
+
+# 3. 训练模型
+anomaly-detector train --data data/processed/real_traffic_features.csv --model xgboost
+
+# 4. 评估模型
+anomaly-detector train evaluate
+
+# 5. 优化模型（基于评估报告）
+anomaly-detector train optimize --report reports/xgboost_evaluation_*.json
+
+# 6. 启动持续训练
+anomaly-detector train continuous --interval 300 --min-samples 500 --background
+
+# 7. 监控系统状态
+anomaly-detector status
+```
+
+这两个闭环流程确保了系统能够：
+1. 从零开始构建和训练模型
+2. 持续优化模型性能
+3. 实时检测网络异常
+4. 生成详细的分析报告
+5. 基于反馈持续改进
+
+这样的设计使得系统具有自适应能力，能够随着时间的推移不断提高检测准确性。
 
 **第二次闭环优化：**
 ```bash

@@ -1,11 +1,11 @@
 import os
+from datetime import datetime  # 更清晰的datetime模块导入
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Tuple, Optional, Union
 import pandas as pd
 import json
-from datetime import datetime
 import logging
 
 # 设置中文字体支持
@@ -536,15 +536,27 @@ class DetectionVisualizer:
             for record in displayed_records:
                 if isinstance(record, dict):
                     # 提取记录信息
-                    timestamp = record.get('detection_time', 'N/A')
-                    if timestamp != 'N/A' and isinstance(timestamp, (int, float)):
-                        from datetime import datetime
-                        # 处理可能的毫秒时间戳
-                        if timestamp > 1e10:  # 如果是毫秒时间戳
-                            timestamp = timestamp / 1000
-                        timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-                    elif timestamp == 'N/A':
-                        timestamp = 'N/A'
+                    # 处理时间戳
+                    timestamp = record.get('timestamp', record.get('detection_time', record.get('time', 'N/A')))
+                    if timestamp != 'N/A':
+                        try:
+                            # 尝试多种时间戳格式
+                            if isinstance(timestamp, (int, float)):
+                                # 处理可能的毫秒时间戳
+                                if timestamp > 1e10:  # 如果是毫秒时间戳
+                                    timestamp = timestamp / 1000
+                                timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                            else:
+                                # 如果已经是字符串格式，尝试直接解析
+                                try:
+                                    # 尝试ISO格式
+                                    dt = datetime.fromisoformat(timestamp)
+                                    timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                                except:
+                                    # 保留原始字符串
+                                    timestamp = str(timestamp)
+                        except Exception as e:
+                            timestamp = '解析失败'
                     
                     # 处理IP地址字段
                     src_ip = record.get('src_ip', record.get('source_ip', 'N/A'))
@@ -554,15 +566,46 @@ class DetectionVisualizer:
                     protocol = record.get('protocol', record.get('proto', 'N/A'))
                     
                     # 处理异常类型
-                    anomaly_type = record.get('detection_method', 'N/A')
+                    anomaly_type = record.get('anomaly_type', record.get('detection_method', '未知类型'))
+                    
+                    # 处理子类型
+                    sub_type = record.get('anomaly_subtype', record.get('sub_type', '无'))
                     
                     # 处理严重性
-                    severity = f"{record.get('anomaly_score', 0):.3f}" if 'anomaly_score' in record else 'N/A'
+                    severity = record.get('severity', '未知')
+                    if severity == '未知' or severity == '中':
+                        # 尝试从anomaly_score或score获取严重性
+                        if 'anomaly_score' in record:
+                            severity = f"{record['anomaly_score']:.3f}"
+                        elif 'score' in record:
+                            severity = f"{record['score']:.3f}"
+                        else:
+                            severity = '无评分'
                     
                     # 处理详情
-                    threshold = record.get('threshold_used', 'N/A')
-                    details = f"阈值: {threshold}" if threshold != 'N/A' else 'N/A'
+                    details = record.get('details', None)
                     
+                    # 如果details为空或标记为无信息，则尝试从features中提取
+                    if not details or details in ['无详细信息', 'N/A', 'None', '', None]:
+                        features = record.get('features', {})
+                        if features:
+                            byte_count = features.get('byte_count', 'N/A')
+                            packet_count = features.get('packet_count', 'N/A')
+                            
+                            # 统一处理flow_duration字段
+                            flow_duration = features.get('flow_duration', 'N/A')
+                            if flow_duration != 'N/A':
+                                try:
+                                    flow_duration = f"{float(flow_duration):.2f}"
+                                except (ValueError, TypeError):
+                                    pass  # 保持原值如果转换失败
+                                    
+                            details = f"字节数: {byte_count}, 数据包数: {packet_count}, 连接时长: {flow_duration}"
+                        else:
+                            details = '无详细信息'
+                    # 确保details字段始终有有效值
+                    if not details or details in ['无详细信息', 'N/A', 'None', '', None]:
+                        details = '无详细信息'
                     html += f"""
                 <tr>
                     <td>{timestamp}</td>
@@ -571,14 +614,14 @@ class DetectionVisualizer:
                     <td>{protocol}</td>
                     <td>{anomaly_type}</td>
                     <td>{severity}</td>
-                    <td>{details}</td>
+                    <td>{details if details else '无详细信息'}</td>
                 </tr>
                     """
         else:
             # 如果没有异常记录，显示提示信息
             html += """
                 <tr>
-                    <td colspan="7" style="text-align: center;">未检测到异常</td>
+                    <td colspan="6" style="text-align: center;">未检测到异常</td>
                 </tr>
             """
         
@@ -615,11 +658,10 @@ class DetectionVisualizer:
                         # 提取记录信息
                         timestamp = record.get('detection_time', 'N/A')
                         if timestamp != 'N/A' and isinstance(timestamp, (int, float)):
-                            from datetime import datetime
                             # 处理可能的毫秒时间戳
                             if timestamp > 1e10:  # 如果是毫秒时间戳
                                 timestamp = timestamp / 1000
-                            timestamp = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+                            timestamp = datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
                         elif timestamp == 'N/A':
                             timestamp = 'N/A'
                         

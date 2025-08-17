@@ -1,77 +1,9 @@
 import time
 import threading
-import logging
-from collections import defaultdict
+from typing import Dict, Optional, Any
 from src.system.base_component import BaseComponent
 from src.utils.logger import get_logger
-
-class Session:
-    """会话对象，存储会话相关信息和数据包"""
-    
-    def __init__(self, session_id, src_ip, dst_ip, protocol, src_port=None, dst_port=None):
-        self.session_id = session_id
-        self.src_ip = src_ip
-        self.dst_ip = dst_ip
-        self.protocol = protocol
-        self.src_port = src_port
-        self.dst_port = dst_port
-        
-        self.first_seen = time.time()  # 首次出现时间
-        self.last_seen = self.first_seen  # 最后活动时间
-        self.packets = []  # 数据包列表
-        self.total_packets = 0  # 总数据包数
-        self.total_bytes = 0  # 总字节数
-        
-        # 方向统计
-        self.src_to_dst_packets = 0
-        self.src_to_dst_bytes = 0
-        self.dst_to_src_packets = 0
-        self.dst_to_src_bytes = 0
-
-    def add_packet(self, packet):
-        """添加数据包到会话"""
-        self.last_seen = time.time()
-        self.total_packets += 1
-        self.total_bytes += packet["length"]
-        
-        # 判断方向
-        if packet["ip"]["src"] == self.src_ip and packet["ip"]["dst"] == self.dst_ip:
-            self.src_to_dst_packets += 1
-            self.src_to_dst_bytes += packet["length"]
-        else:
-            self.dst_to_src_packets += 1
-            self.dst_to_src_bytes += packet["length"]
-        
-        # 限制数据包存储数量，只保留最近的1000个包
-        self.packets.append(packet)
-        if len(self.packets) > 1000:
-            self.packets.pop(0)
-
-    def get_duration(self):
-        """获取会话持续时间"""
-        return self.last_seen - self.first_seen
-
-    def to_dict(self):
-        """转换为字典表示"""
-        return {
-            "session_id": self.session_id,
-            "src_ip": self.src_ip,
-            "dst_ip": self.dst_ip,
-            "protocol": self.protocol,
-            "src_port": self.src_port,
-            "dst_port": self.dst_port,
-            "first_seen": self.first_seen,
-            "last_seen": self.last_seen,
-            "duration": self.get_duration(),
-            "total_packets": self.total_packets,
-            "total_bytes": self.total_bytes,
-            "src_to_dst_packets": self.src_to_dst_packets,
-            "src_to_dst_bytes": self.src_to_dst_bytes,
-            "dst_to_src_packets": self.dst_to_src_packets,
-            "dst_to_src_bytes": self.dst_to_src_bytes,
-            "current_packet_count": len(self.packets)
-        }
-
+from src.capture.session import Session
 
 class SessionTracker(BaseComponent):
     """会话跟踪器，负责维护网络会话状态"""
@@ -119,18 +51,24 @@ class SessionTracker(BaseComponent):
         # 其他协议
         return f"{src_ip}-{dst_ip}-{protocol}"
 
-    def process_packet(self, packet):
+    def process_packet(self, packet_data):
         """处理数据包，更新会话状态"""
         if not self._is_running:
             return None
             
         try:
+            # packet_data是从PacketCapture.get_next_packet()获取的数据
+            # 它应该是已经解析后的字典格式
+            packet = packet_data
+                
             ip = packet.get("ip")
             transport = packet.get("transport")
             
             if not ip:
                 self.logger.debug("忽略非IP数据包")
                 return None
+                
+            self.logger.debug(f"处理数据包: IP={ip}, Transport={transport}")
                 
             # 生成会话ID
             session_id = self._generate_session_id(ip, transport)
@@ -144,7 +82,8 @@ class SessionTracker(BaseComponent):
                 src_ip, dst_ip = ip["src"], ip["dst"]
                 if src_ip > dst_ip:
                     src_ip, dst_ip = dst_ip, src_ip
-                    if src_port and dst_port and src_port < dst_port:
+                    # 确保端口也交换
+                    if src_port is not None and dst_port is not None:
                         src_port, dst_port = dst_port, src_port
                 
                 self.sessions[session_id] = Session(
@@ -184,33 +123,61 @@ class SessionTracker(BaseComponent):
         )
         return sorted_sessions[:limit]
 
-    def _cleanup_expired_sessions(self):
-        """清理超时会话"""
-        current_time = time.time()
-        expired = []
-        
-        for session_id, session in self.sessions.items():
-            if current_time - session.last_seen > self.session_timeout:
-                expired.append(session_id)
-        
-        if expired:
-            self.logger.info(f"清理{len(expired)}个超时会话")
-            for session_id in expired:
-                del self.sessions[session_id]
-
-    def _cleanup_loop(self):
+    def _session_cleanup_loop(self):
         """会话清理循环"""
         while self._is_running:
             try:
-                self._cleanup_expired_sessions()
-                # 每分钟检查一次
-                for _ in range(60):
-                    if not self._is_running:
-                        break
-                    time.sleep(1)
+                current_time = time.time()
+                
+                # 清理过期会话
+                expired_sessions = []
+                for session_id, session in self.sessions.items():
+                    if current_time - session.last_activity > self.session_timeout:
+                        expired_sessions.append(session_id)
+                
+                # 处理过期会话
+                for session_id in expired_sessions:
+                    session = self.sessions.pop(session_id, None)
+                    if session:
+                        self.logger.debug(f"会话 {session_id} 已超时，正在处理...")
+                        # 将会话数据发送给回调函数（流量分析器）
+                        if self.data_callback:
+                            try:
+                                # 准备会话数据
+                                session_data = {
+                                    'session_id': session_id,
+                                    'src_ip': session.src_ip,
+                                    'dst_ip': session.dst_ip,
+                                    'src_port': session.src_port,
+                                    'dst_port': session.dst_port,
+                                    'protocol': session.protocol,
+                                    'start_time': session.start_time,
+                                    'end_time': current_time,
+                                    'packet_count': session.packet_count,
+                                    'byte_count': session.byte_count,
+                                    'flow_duration': current_time - session.start_time
+                                }
+                                
+                                # 发送数据
+                                self.data_callback(session_data)
+                                self.logger.debug(f"会话 {session_id} 数据已发送到分析器")
+                            except Exception as e:
+                                self.logger.error(f"发送会话数据失败: {e}")
+                        else:
+                            self.logger.warning("未设置数据回调函数，会话数据未发送")
+                        
+                        self.session_count -= 1
+                
+                # 如果有会话被处理，记录日志
+                if expired_sessions:
+                    self.logger.info(f"处理了 {len(expired_sessions)} 个过期会话")
+                
+                # 等待下次清理
+                time.sleep(1)
+                
             except Exception as e:
-                self.logger.error(f"会话清理循环出错: {str(e)}", exc_info=True)
-                time.sleep(10)
+                self.logger.error(f"会话清理循环出错: {e}")
+                time.sleep(1)
 
     def get_next_updated_session(self, timeout=1):
         """获取下一个更新的会话"""
@@ -222,27 +189,81 @@ class SessionTracker(BaseComponent):
         """启动会话跟踪器"""
         if self._is_running:
             self.logger.warning("会话跟踪器已在运行中")
-            return
+            return True
             
         super().start()
-        self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        
+        # 启动会话清理线程
+        self._cleanup_thread = threading.Thread(target=self._session_cleanup_loop, daemon=True)
         self._cleanup_thread.start()
+        
         self.logger.info("会话跟踪器已启动")
+        return True
 
     def stop(self):
         """停止会话跟踪器"""
         if not self._is_running:
-            return
+            return True
             
+        self.logger.info("正在停止会话跟踪器...")
+        
+        # 手动刷新所有会话
+        self._flush_all_sessions()
+        
         super().stop()
         
+        # 停止清理线程
         if self._cleanup_thread and self._cleanup_thread.is_alive():
             self._cleanup_thread.join(timeout=5)
             if self._cleanup_thread.is_alive():
                 self.logger.warning("会话清理线程未能正常终止")
         
-        self.logger.info(f"会话跟踪器已停止，共清理{len(self.sessions)}个会话")
-        self.sessions.clear()
+        self.logger.info(f"会话跟踪器已停止，共清理{self.session_count}个会话")
+        self.session_count = 0
+        return True
+
+    def _flush_all_sessions(self):
+        """手动刷新所有会话"""
+        try:
+            current_time = time.time()
+            session_ids = list(self.sessions.keys())
+            
+            self.logger.info(f"正在刷新 {len(session_ids)} 个会话")
+            
+            # 处理所有会话
+            for session_id in session_ids:
+                session = self.sessions.pop(session_id, None)
+                if session:
+                    # 将会话数据发送给回调函数（流量分析器）
+                    if self.data_callback:
+                        try:
+                            # 准备会话数据
+                            session_data = {
+                                'session_id': session_id,
+                                'src_ip': session.src_ip,
+                                'dst_ip': session.dst_ip,
+                                'src_port': session.src_port,
+                                'dst_port': session.dst_port,
+                                'protocol': session.protocol,
+                                'start_time': session.start_time,
+                                'end_time': current_time,
+                                'packet_count': session.packet_count,
+                                'byte_count': session.byte_count,
+                                'flow_duration': current_time - session.start_time
+                            }
+                            
+                            # 发送数据
+                            self.data_callback(session_data)
+                            self.logger.debug(f"会话 {session_id} 数据已发送到分析器")
+                        except Exception as e:
+                            self.logger.error(f"发送会话数据失败: {e}")
+                    else:
+                        self.logger.warning("未设置数据回调函数，会话数据未发送")
+                    
+                    self.session_count -= 1
+                    
+        except Exception as e:
+            self.logger.error(f"刷新会话时出错: {e}")
 
     def get_status(self):
         """获取组件状态"""
@@ -255,3 +276,48 @@ class SessionTracker(BaseComponent):
         })
         return status
     
+    def set_data_callback(self, callback):
+        """
+        设置数据回调函数
+        
+        参数:
+            callback: 回调函数，用于处理会话数据
+        """
+        self._data_callback = callback
+
+    def _process_completed_sessions(self):
+        """处理已完成的会话"""
+        current_time = time.time()
+        completed_sessions = []
+        
+        with self._lock:
+            # 查找超时的会话
+            expired_sessions = []
+            for session_id, session in self._sessions.items():
+                # 如果会话超过30秒没有新数据包，则认为已完成
+                if current_time - session.last_activity_time > 30:
+                    expired_sessions.append(session_id)
+            
+            # 处理过期会话
+            for session_id in expired_sessions:
+                session = self._sessions.pop(session_id, None)
+                if session:
+                    completed_sessions.append(session)
+        
+        # 处理完成的会话
+        for session in completed_sessions:
+            try:
+                session_data = session.to_dict()
+                self.logger.debug(f"会话 {session.session_id} 已完成，包含 {len(session.packets)} 个数据包")
+                
+                # 如果设置了回调函数，调用它
+                if hasattr(self, '_data_callback') and self._data_callback:
+                    try:
+                        self._data_callback(session_data)
+                    except Exception as e:
+                        self.logger.error(f"调用数据回调函数时出错: {e}")
+                else:
+                    self.logger.debug("未设置数据回调函数，会话数据未被处理")
+                    
+            except Exception as e:
+                self.logger.error(f"处理完成会话时出错: {e}")

@@ -13,6 +13,8 @@
 - **自适应学习**：动态更新模型以适应网络环境变化
 - **灵活部署**：支持单机部署和分布式架构
 - **可扩展架构**：易于添加新的检测算法和协议解析器
+- **自驱动闭环学习**：全自动的训练-评估-优化-再训练闭环系统
+- **丰富的可视化报告**：支持HTML格式的图形化检测报告
 
 ## 系统架构
 
@@ -85,6 +87,9 @@ anomaly-detector start -i eth1
 # 使用特定模型
 anomaly-detector start --model lstm
 
+# 分析离线PCAP文件
+anomaly-detector start --offline-file /path/to/file.pcap
+
 # 查看帮助
 anomaly-detector --help
 ```
@@ -124,7 +129,7 @@ anomaly-detector train evaluate
 - `model_config.yaml`：模型参数配置
 - `detection_rules.yaml`：规则引擎配置
 
-可通过以下命令查看当前配置：anomaly-detection config show
+可通过以下命令查看当前配置：anomaly-detector config show
 ## 告警处理
 
 系统支持多种告警方式：

@@ -49,6 +49,9 @@ class PacketCapture(BaseComponent):
         
         # 工作模式：实时捕获或离线文件处理
         self.mode = "offline" if offline_file else "live"
+        
+        # 离线文件处理完成标志
+        self.offline_processing_complete = False
     
     def set_interface(self, interface: str) -> None:
         """设置网络接口"""
@@ -101,28 +104,33 @@ class PacketCapture(BaseComponent):
                 consecutive_errors = 0  # 重置错误计数
                 
                 # 开始捕获数据包
+                packet_count = 0
                 while not self._stop_event.is_set():
                     try:
                         # 读取数据包
                         header, packet = self.pcap.next()
                         if header and packet:
-                            # 添加到队列
-                            if len(self.packet_queue) < self.max_queue_size:
-                                self.packet_queue.append((header, packet))
-                                self.stats["packets_captured"] += 1
-                            else:
-                                self.stats["packets_dropped"] += 1
+                            # 解析数据包
+                            parsed_packet = self._parse_packet(header, packet)
+                            if parsed_packet:
+                                # 添加到队列
+                                if len(self.packet_queue) < self.max_queue_size:
+                                    self.packet_queue.append(parsed_packet)
+                                    self.stats["packets_captured"] += 1
+                                else:
+                                    self.stats["packets_dropped"] += 1
                                 
-                            # 更新队列大小统计
-                            self.stats["queue_size"] = len(self.packet_queue)
+                                # 更新队列大小统计
+                                self.stats["queue_size"] = len(self.packet_queue)
+                                packet_count += 1
                             
                             # 离线文件处理时增加小延迟以避免CPU占用过高
                             if self.mode == "offline":
                                 time.sleep(0.001)  # 1ms延迟
                         elif self.mode == "offline":
                             # 离线文件读取完成
-                            self.logger.info("离线文件读取完成")
-                            self._stop_event.set()
+                            self.logger.info(f"离线文件读取完成，共处理 {packet_count} 个数据包")
+                            self.offline_processing_complete = True
                             break
                             
                     except Exception as e:
@@ -177,14 +185,145 @@ class PacketCapture(BaseComponent):
                     except:
                         pass
                     self.pcap = None
+                    # 离线模式下退出循环
+                    if self.mode == "offline":
+                        break
         
         self.logger.info("抓包循环已停止")
     
+    def _parse_packet(self, header, raw_packet):
+        """
+        解析原始数据包
+        
+        Args:
+            header: pcap头部信息
+            raw_packet: 原始数据包
+            
+        Returns:
+            解析后的数据包字典
+        """
+        try:
+            # 获取时间戳
+            if hasattr(header, 'getts'):
+                ts_sec, ts_usec = header.getts()
+                timestamp = ts_sec + ts_usec / 1e6
+            else:
+                timestamp = time.time()
+            
+            # 解析以太网帧
+            eth = dpkt.ethernet.Ethernet(raw_packet)
+            
+            # 解析IP包
+            if not isinstance(eth.data, dpkt.ip.IP):
+                self.logger.debug("非IP数据包，跳过")
+                return None
+                
+            ip = eth.data
+            
+            # 构建数据包信息字典
+            packet_info = {
+                "timestamp": timestamp,
+                "length": len(raw_packet),
+                "ethernet": {
+                    "src": dpkt.utils.mac_to_str(eth.src),
+                    "dst": dpkt.utils.mac_to_str(eth.dst),
+                    "type": eth.type
+                },
+                "ip": {
+                    "src": dpkt.utils.inet_to_str(ip.src),
+                    "dst": dpkt.utils.inet_to_str(ip.dst),
+                    "protocol": ip.p,
+                    "protocol_name": self._get_protocol_name(ip.p),
+                    "len": ip.len,
+                    "ttl": ip.ttl
+                }
+            }
+            
+            # 解析传输层协议
+            if ip.p == dpkt.ip.IP_PROTO_TCP:
+                tcp = ip.data
+                packet_info["transport"] = {
+                    "src_port": tcp.sport,
+                    "dst_port": tcp.dport,
+                    "flags": tcp.flags,
+                    "seq": tcp.seq,
+                    "ack": tcp.ack,
+                    "winsize": tcp.win
+                }
+                packet_info["payload"] = tcp.data
+                
+            elif ip.p == dpkt.ip.IP_PROTO_UDP:
+                udp = ip.data
+                packet_info["transport"] = {
+                    "src_port": udp.sport,
+                    "dst_port": udp.dport,
+                    "length": udp.len
+                }
+                packet_info["payload"] = udp.data
+                
+            elif ip.p == dpkt.ip.IP_PROTO_ICMP:
+                icmp = ip.data
+                packet_info["transport"] = {
+                    "type": icmp.type,
+                    "code": icmp.code
+                }
+                packet_info["payload"] = icmp.data
+            
+            return packet_info
+            
+        except Exception as e:
+            self.logger.debug(f"解析数据包时出错: {e}")
+            return None
+    
+    def _get_protocol_name(self, protocol_num):
+        """获取协议名称"""
+        protocol_map = {
+            1: "icmp",
+            6: "tcp",
+            17: "udp"
+        }
+        return protocol_map.get(protocol_num, f"unknown({protocol_num})")
+    
+    def _packet_handler(self, packet):
+        """
+        数据包处理回调函数
+        
+        参数:
+            packet: scapy数据包对象
+        """
+        try:
+            # 检查是否应该停止
+            if not self._is_running:
+                return
+            
+            self.packet_count += 1
+            
+            # 解析数据包
+            packet_info = self._parse_packet(packet)
+            if not packet_info:
+                return
+            
+            # 将数据包信息发送给会话跟踪器
+            if self.session_tracker:
+                self.session_tracker.update_session(packet_info)
+            else:
+                self.logger.warning("会话跟踪器未设置，数据包信息未处理")
+            
+            # 记录处理进度
+            if self.packet_count % 100 == 0:
+                self.logger.debug(f"已处理 {self.packet_count} 个数据包")
+                
+        except Exception as e:
+            self.logger.error(f"处理数据包时出错: {e}")
+
     def start(self) -> None:
         """启动数据包捕获"""
         if self.is_running:
             self.logger.warning("抓包组件已在运行中")
             return
+            
+        # 重置离线处理完成标志
+        self.offline_processing_complete = False
             
         super().start()
         
@@ -224,7 +363,7 @@ class PacketCapture(BaseComponent):
         super().stop()
         self.logger.info("抓包组件已停止")
     
-    def get_next_packet(self) -> Optional[tuple]:
+    def get_next_packet(self) -> Optional[dict]:
         """获取下一个数据包"""
         if self.packet_queue:
             return self.packet_queue.pop(0)
@@ -241,6 +380,7 @@ class PacketCapture(BaseComponent):
             "is_capturing": self.pcap is not None,
             "queue_size": len(self.packet_queue),
             "queue_max_size": self.max_queue_size,
-            "stats": self.stats.copy()
+            "stats": self.stats.copy(),
+            "offline_processing_complete": self.offline_processing_complete
         })
         return status

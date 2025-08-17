@@ -23,7 +23,7 @@ class BaseModel(metaclass=abc.ABCMeta):
     def fit(
         self,
         X: Union[pd.DataFrame, np.ndarray],
-        y: Union[pd.Series, np.ndarray],** kwargs
+        y: Union[pd.Series, np.ndarray], **kwargs
     ) -> None:
         """
         全量训练模型
@@ -33,7 +33,17 @@ class BaseModel(metaclass=abc.ABCMeta):
             y: 标签数据（0=正常，1=异常）
             **kwargs: 训练参数（如epochs、batch_size等）
         """
-        self.feature_names = X.columns.tolist() if isinstance(X, pd.DataFrame) else None
+        # 处理不同维度的输入数据
+        if len(X.shape) == 3:
+            # 对于3D数据（如LSTM输入），提取最后一个时间步的特征名称
+            self.feature_names = getattr(X, 'columns', None)
+            if self.feature_names is None and isinstance(X, np.ndarray):
+                # 如果是numpy数组，创建默认的特征名称
+                self.feature_names = [f"feature_{i}" for i in range(X.shape[2])]
+        else:
+            # 对于2D数据，直接提取特征名称
+            self.feature_names = X.columns.tolist() if isinstance(X, pd.DataFrame) else [f"feature_{i}" for i in range(X.shape[1])]
+        
         self.train_timestamp = time.time()
 
     @abc.abstractmethod

@@ -1,105 +1,94 @@
-try:
-    from src.utils.tf_silence import aggressive_silence
-    aggressive_silence()
-except Exception:
-    pass  # 忽略任何导入错误
-
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+异常检测系统CLI主程序
+"""
 import os
 import sys
-import logging
 
-# 在任何其他导入之前设置环境变量
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-
-# 设置Python日志级别
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('absl').setLevel(logging.ERROR)
-
-# 在最早的阶段重定向stderr来屏蔽特定的日志信息
-original_stderr = sys.stderr
-
-class FilteredStderr:
-    def __init__(self, original_stderr):
-        self.original_stderr = original_stderr
-        # 需要屏蔽的日志关键词
-        self.skip_patterns = [
-            'tensorflow',
-            'cuda', 
-            'cudnn',
-            'cufft',
-            'cublas',
-            'absl',
-            'computation_placer',
-            'oneDNN',
-            'stream_executor',
-            'external/local_xla',
-            'eigen',
-            'registering factory',
-            'attempting to register',
-            'please check linkage'
-        ]
-    
-    def write(self, msg):
-        # 检查是否包含需要屏蔽的模式
-        msg_lower = msg.lower()
-        for pattern in self.skip_patterns:
-            if pattern in msg_lower:
-                return  # 直接返回，不写入stderr
-        # 如果不包含屏蔽模式，则正常输出
-        self.original_stderr.write(msg)
-    
-    def flush(self):
-        self.original_stderr.flush()
-
-# 立即应用过滤器
-sys.stderr = FilteredStderr(original_stderr)
+# 添加项目根目录到Python路径
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(0, project_root)
 
 import typer
 from typing import Optional
-from src.cli.commands.train import train_app
-from src.cli.commands.init import app as init_app
-from src.cli.commands.generate_test_data import app as generate_test_data_app
-from src.cli.commands.status import main as status_command
-from src.cli.commands.start import app as start_app
-from src.cli.commands.stop import app as stop_app
-from src.cli.commands.report import app as report_app
-from src.cli.commands.feedback import app as feedback_app
-from src.cli.commands.detect import app as detect_app
-from src.cli.utils import print_info, print_error
+from src.config.config_manager import ConfigManager
+from src.utils.logger import get_logger
+from src.cli.commands import train, generate_test_data, pcap_to_csv, report, start
+
+# 初始化日志
+logger = get_logger(__name__)
 
 # 创建Typer应用
-app = typer.Typer(
-    name="anomaly-detector",
-    help="实时以太网异常检测系统",
-    add_completion=False
-)
+app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 # 添加子命令
-app.add_typer(init_app, name="init", help="系统初始化命令")
-app.add_typer(generate_test_data_app, name="generate-test-data", help="生成测试数据命令")
-app.add_typer(train_app, name="train", help="模型训练命令")
-app.add_typer(start_app, name="start", help="启动系统命令")
-app.add_typer(stop_app, name="stop", help="停止系统命令")
-app.add_typer(report_app, name="report", help="检测报告命令")
-app.add_typer(feedback_app, name="feedback", help="反馈处理命令")
-app.add_typer(detect_app, name="detect", help="离线检测命令")
+train_app = train.train_app
+generate_test_data_app = generate_test_data.app
+pcap_to_csv_app = pcap_to_csv.app
+report_app = report.app
+start_app = start.app
 
-# 添加简单命令
-app.command(name="status")(status_command)
+app.add_typer(train_app, name="train", help="训练模型")
+app.add_typer(generate_test_data_app, name="generate-test-data", help="生成测试数据")
+app.add_typer(pcap_to_csv_app, name="pcap-to-csv", help="将PCAP文件转换为CSV格式")
+app.add_typer(report_app, name="report", help="生成检测报告")
+app.add_typer(start_app, name="start", help="启动异常检测系统")
+
+@app.command()
+def init():
+    """初始化系统配置"""
+    typer.echo("正在初始化系统配置...")
+    
+    # 创建必要的目录
+    dirs_to_create = ["config", "data", "models", "logs", "reports"]
+    for dir_name in dirs_to_create:
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+            typer.echo(f"已创建目录: {dir_name}")
+    
+    # 检查配置文件是否存在
+    config_files = [
+        "config/config.yaml",
+        "config/model_config.yaml", 
+        "config/detection_rules.yaml",
+        "config/self_driving_config.yaml"
+    ]
+    
+    missing_configs = []
+    for config_file in config_files:
+        if not os.path.exists(config_file):
+            missing_configs.append(config_file)
+    
+    if missing_configs:
+        typer.echo("以下配置文件缺失:")
+        for config_file in missing_configs:
+            typer.echo(f"  - {config_file}")
+        typer.echo("请运行 'anomaly-detector generate-default-config' 命令生成默认配置文件")
+    else:
+        typer.echo("系统配置已存在")
+    
+    typer.echo("初始化完成!")
 
 @app.callback()
-def main_callback(
-    version: Optional[bool] = typer.Option(
-        None, "--version", "-v", 
-        help="显示系统版本",
-        is_eager=True
-    )
+def main(
+    ctx: typer.Context,
+    config_dir: str = typer.Option("config", "--config-dir", "-c", help="配置文件目录"),
+    log_level: str = typer.Option("INFO", "--log-level", "-l", help="日志级别 (DEBUG, INFO, WARNING, ERROR)")
 ):
-    """主回调函数"""
-    if version:
-        print_info("异常检测系统 v1.0.0")
-        raise typer.Exit()
+    """异常检测系统CLI工具"""
+    # 设置日志级别
+    import logging
+    logging.getLogger().setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    
+    # 加载配置
+    try:
+        config = ConfigManager(config_dir=config_dir)
+        ctx.ensure_object(dict)
+        ctx.obj["config"] = config
+    except Exception as e:
+        logger.error(f"配置加载失败: {e}")
+        raise typer.Exit(1)
 
 if __name__ == "__main__":
     app()
